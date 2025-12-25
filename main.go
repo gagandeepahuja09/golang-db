@@ -11,11 +11,14 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/google/btree"
 )
 
 type DB struct {
-	data    map[string]string
-	walFile *os.File
+	data     map[string]string
+	walFile  *os.File
+	memTable btree.BTree
 }
 
 func (db *DB) cmdGet(args []string) {
@@ -129,6 +132,12 @@ func buildDatabaseFromWal() (*DB, error) {
 		walFile: file,
 	}
 
+	btree.New()
+
+	db.memTable.ReplaceOrInsert(btree.Item{})
+
+	db.memTable.Get()
+
 	for {
 		payload, err := readEntry(file)
 		if err == io.EOF {
@@ -175,6 +184,8 @@ func main() {
 			}
 		case "EXIT":
 			breakLoop = true
+		default:
+			fmt.Println("Command not supported")
 		}
 		if breakLoop {
 			break
