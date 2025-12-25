@@ -12,13 +12,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/btree"
+	"github.com/golang-db/memtable"
 )
 
 type DB struct {
-	data     map[string]string
-	walFile  *os.File
-	memTable btree.BTree
+	walFile      *os.File
+	memTable     memtable.Memtable
+	ssTableFiles []*os.File
 }
 
 func (db *DB) cmdGet(args []string) {
@@ -27,7 +27,7 @@ func (db *DB) cmdGet(args []string) {
 		return
 	}
 	key := args[1]
-	value, ok := db.data[key]
+	value, ok := db.memTable.Get(key)
 	if !ok {
 		fmt.Printf("No value found for GET %s\n", key)
 	} else {
@@ -44,7 +44,38 @@ func (db *DB) cmdPut(args []string) error {
 	if err := db.writeToWal(key, value); err != nil {
 		return errors.New("Something went wrong")
 	}
-	db.data[key] = value
+	db.memTable.Put(key, value)
+
+	if db.memTable.ShouldFlush() {
+		// todo: log for error
+		db.flushMemtableToSsTable()
+	}
+	return nil
+}
+
+func (db *DB) flushMemtableToSsTable() error {
+	// 1. Iterate through the memtable and insert all content in a new ss table file
+	numFiles := len(db.ssTableFiles)
+
+	if err := os.MkdirAll("ss_table/l0", 0755); err != nil {
+		return err
+	}
+
+	ssTableFilePath := fmt.Sprintf("ss_table/l0/l0_%d.log", numFiles)
+	file, err := os.OpenFile(ssTableFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	db.memTable.Iterate(func(key, value string) {
+		ssTableEntry := fmt.Sprintf("%s %s\n", key, value)
+		file.Write([]byte(ssTableEntry))
+	})
+
+	// 2. Clear the memtable and WAL
+	db.memTable.Clear()
+	db.walFile.Truncate(0)
+	db.walFile.Seek(0, 0)
+
 	return nil
 }
 
@@ -119,7 +150,6 @@ func readEntry(file *os.File) (payload []byte, err error) {
 }
 
 func buildDatabaseFromWal() (*DB, error) {
-	data := make(map[string]string)
 	file, err := os.OpenFile("wal.log", os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		slog.Error("WAL_FILE_OPEN_FAILED", map[string]interface{}{
@@ -128,15 +158,9 @@ func buildDatabaseFromWal() (*DB, error) {
 		return nil, err
 	}
 	db := &DB{
-		data:    data,
-		walFile: file,
+		walFile:  file,
+		memTable: memtable.NewMemtable(),
 	}
-
-	btree.New()
-
-	db.memTable.ReplaceOrInsert(btree.Item{})
-
-	db.memTable.Get()
 
 	for {
 		payload, err := readEntry(file)
@@ -156,7 +180,7 @@ func buildDatabaseFromWal() (*DB, error) {
 		}
 		key := args[1]
 		value := args[2]
-		db.data[key] = value
+		db.memTable.Put(key, value)
 	}
 }
 
