@@ -17,6 +17,9 @@ import (
 
 const (
 	ssTableMaxBlockLength = 4000 // 4 KB
+
+	errWhileReadingIndexBlock    = "error while reading index block"
+	potentialIndexBlockCorrupted = "index block seems incomplete or corrupted"
 )
 
 type indexBlockEntry struct {
@@ -25,9 +28,10 @@ type indexBlockEntry struct {
 }
 
 type DB struct {
-	walFile      *os.File
-	memTable     memtable.Memtable
-	ssTableFiles []*os.File
+	walFile        *os.File
+	memTable       memtable.Memtable
+	ssTableFiles   []*os.File
+	ssTableIndexes [][]indexBlockEntry
 }
 
 func (db *DB) cmdGet(args []string) {
@@ -212,7 +216,7 @@ func readEntry(file *os.File) (payload []byte, err error) {
 	return payload, err
 }
 
-func buildDatabaseFromWal() (*DB, error) {
+func buildMemtableFromWal() (*DB, error) {
 	file, err := os.OpenFile("wal.log", os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		slog.Error("WAL_FILE_OPEN_FAILED", map[string]interface{}{
@@ -247,12 +251,100 @@ func buildDatabaseFromWal() (*DB, error) {
 	}
 }
 
+func buildSsTableIndexFromFile(filePath string) ([]indexBlockEntry, error) {
+	file, err := os.OpenFile(filePath, os.O_RDONLY, 0644)
+	if os.IsNotExist(err) {
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	// 1. read footer and get the index offset
+	info, err := os.Stat("ss_table/l0")
+	fileSize := info.Size()
+	footerOffset := fileSize - 4
+	indexOffsetBuf := make([]byte, 4)
+	if _, err = file.ReadAt(indexOffsetBuf, footerOffset); err != nil {
+		return nil, err
+	}
+	indexOffset := binary.BigEndian.Uint32(indexOffsetBuf)
+
+	// 2. load index in-memory
+	// 2.1 read index byte array
+	indexBlockLength := (fileSize - 4) - int64(indexOffset)
+	indexBlockBuf := make([]byte, indexBlockLength)
+	if _, err = file.ReadAt(indexBlockBuf, int64(indexOffset)); err != nil {
+		return nil, err
+	}
+
+	// 2.2 read keys and offsets from the index block and create in-memory index
+	ssTableIndex := []indexBlockEntry{}
+	for i := 0; i < int(indexBlockLength); {
+		// read first 4 bytes to get length
+		keyLengthBuf := indexBlockBuf[i : i+4]
+		keyLength := binary.BigEndian.Uint32(keyLengthBuf)
+
+		// read next keyLength bytes
+		i += 4
+		if i >= int(indexBlockLength) {
+			return nil, errors.New(errWhileReadingIndexBlock + ": " + potentialIndexBlockCorrupted)
+		}
+		key := string(indexBlockBuf[i : i+int(keyLength)])
+
+		// read offset
+		i += int(keyLength)
+		if i >= int(indexBlockLength) {
+			return nil, errors.New(errWhileReadingIndexBlock + ": " + potentialIndexBlockCorrupted)
+		}
+		offsetBuf := indexBlockBuf[i : i+4]
+		offset := binary.BigEndian.Uint32(offsetBuf)
+
+		ssTableIndex = append(ssTableIndex, indexBlockEntry{key: key, offset: int(offset)})
+		i += 4
+	}
+	return ssTableIndex, nil
+}
+
+func buildSsTableIndexes() ([][]indexBlockEntry, error) {
+	ssTableIndexes := [][]indexBlockEntry{}
+	// iteratively ready all SSTable files
+	if err := os.MkdirAll("ss_table/l0", 0755); err != nil {
+		return nil, err
+	}
+	// todo: os.Entries might be a better approach if there are frequent deletes due to compaction
+	for i := 0; ; i++ {
+		// todo: move this to a function
+		filePath := fmt.Sprintf("ss_table/l0/l0_%d.log", i)
+		ssTableIndex, err := buildSsTableIndexFromFile(filePath)
+		if os.IsNotExist(err) {
+			break
+		}
+		ssTableIndexes = append(ssTableIndexes, ssTableIndex)
+	}
+	return ssTableIndexes, nil
+}
+
+func getDbEntity() (*DB, error) {
+	db, err := buildMemtableFromWal()
+	if err != nil {
+		return nil, err
+	}
+	defer db.walFile.Close()
+	ssTableIndexes, err := buildSsTableIndexes()
+	if err != nil {
+		return nil, err
+	}
+	db.ssTableIndexes = ssTableIndexes
+	return db, nil
+}
+
 func main() {
-	db, err := buildDatabaseFromWal()
+	db, err := getDbEntity()
 	if err != nil {
 		log.Fatal("Error while setting up DB")
 	}
-	defer db.walFile.Close()
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()

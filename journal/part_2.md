@@ -106,6 +106,11 @@ ok, for simplicity, I am thinking of starting the implementation with only 1 lev
 * After writing the index block, we need to write the footer. Footer structure:
     * [index offset -> 4 bytes]
 
+### Need to add tests
+* Logic for flushing memtable to sstable in the correct block based format with index and footer block (d)
+* Logic for loading the sstable indexes in-memory during application startup. (d)
+* Write a test which calls flushMemtableToSsTable first and then calls buildSsTableIndexes. Assert the output of buildSsTableIndexes. (wip)
+
 ### Logic for reading SSTable
 * Check the index offset from footer.
 * Load the entire index in-memory.
