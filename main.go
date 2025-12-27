@@ -15,6 +15,15 @@ import (
 	"github.com/golang-db/memtable"
 )
 
+const (
+	ssTableMaxBlockLength = 4000 // 4 KB
+)
+
+type indexBlockEntry struct {
+	key    string
+	offset int
+}
+
 type DB struct {
 	walFile      *os.File
 	memTable     memtable.Memtable
@@ -56,20 +65,74 @@ func (db *DB) cmdPut(args []string) error {
 func (db *DB) flushMemtableToSsTable() error {
 	// 1. Iterate through the memtable and insert all content in a new ss table file
 	numFiles := len(db.ssTableFiles)
-
 	if err := os.MkdirAll("ss_table/l0", 0755); err != nil {
 		return err
 	}
-
 	ssTableFilePath := fmt.Sprintf("ss_table/l0/l0_%d.log", numFiles)
+	// 1.1 Create and open file in append-only mode
 	file, err := os.OpenFile(ssTableFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return err
 	}
+
+	// 1.2 Identify 4kB blocks, write them and build up the struct for index block
+	blockLength := 0
+	blockStartOffset := 0
+	indexBlockStartOffset := 0
+	blockFirstKey := ""
+	ssTableBlock := ""
+	offset := 0
+	indexBlock := []indexBlockEntry{}
 	db.memTable.Iterate(func(key, value string) {
-		ssTableEntry := fmt.Sprintf("%s %s\n", key, value)
-		file.Write([]byte(ssTableEntry))
+		if blockFirstKey == "" {
+			blockFirstKey = key
+		}
+		ssTableEntry := fmt.Sprintf("PUT %s %s\n", key, value)
+		offset += len(ssTableEntry)
+		blockLength += len(ssTableEntry)
+		ssTableBlock = ssTableBlock + ssTableEntry
+		if blockLength > ssTableMaxBlockLength {
+			// one data block completed
+
+			// add relevant details to indexBlock
+			// [key_length -> 4 bytes][key][offset -> 4 bytes]
+			indexBlock = append(indexBlock, indexBlockEntry{
+				key:    blockFirstKey,
+				offset: blockStartOffset,
+			})
+
+			indexBlockStartOffset += blockStartOffset
+
+			// write this data block to the file
+			// todo: change data block entry to [length][payload][checksum]xx
+			// instead of "PUT key value\n"
+			// if _, err := file.Write([]byte(ssTableBlock)); err != nil {
+			// 	return err
+			// }
+			file.Write([]byte(ssTableBlock))
+
+			// start new block
+			blockStartOffset = offset
+			blockFirstKey = ""
+			blockLength = 0
+			ssTableBlock = ""
+		}
 	})
+
+	// 1.3 Write index blocks
+	for _, ib := range indexBlock {
+		indexBuf := make([]byte, 4+len(ib.key)+4)
+		binary.BigEndian.PutUint32(indexBuf[0:4], uint32(len(ib.key)))
+		copy(indexBuf[4:4+len(ib.key)], []byte(ib.key))
+		binary.BigEndian.PutUint32(indexBuf[4+len(ib.key):], uint32(ib.offset))
+		if _, err := file.Write(indexBuf); err != nil {
+			return err
+		}
+	}
+
+	// 1.4 Write footer
+	footerBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(footerBuf[0:4], uint32(indexBlockStartOffset))
 
 	// 2. Clear the memtable and WAL
 	db.memTable.Clear()

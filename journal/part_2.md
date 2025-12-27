@@ -93,4 +93,23 @@ ok, for simplicity, I am thinking of starting the implementation with only 1 lev
 ### Step 1: Memtable implementation: Will use below package
 "github.com/google/btree"
 
+### L0 SSTable Structure for effective binary search
+* Before insertion, need to break the 5MB memtable into 4kb blocks.
+* Can be done during iteration.
+* Also, need to create another map for index. key ==> first key of the block, value ==> offset at which the block starts. How to identify the offset at which the block starts?
+* In a block, there will only be key and value as string.
+* Structure of a block "PUT key value"  ==> not keeping checksum or length here for now for simplicity. Payload will be PUT key value. (this is for simplicity, we can improve later)
+* We will create a []byte array of this and then do file.Write. After doing file.Write, the n integer that is returned should be the offset. That way we will keep maintaining the index.
+* After this, we will write the index block. Structure of index block: 
+    * key ==> first key of the block, value ==> offset
+    * [key_length -> 4 bytes][key][offset -> 4 bytes]
+* After writing the index block, we need to write the footer. Footer structure:
+    * [index offset -> 4 bytes]
+
+### Logic for reading SSTable
+* Check the index offset from footer.
+* Load the entire index in-memory.
+* Run binary search for getting the appropriate block which has key <= "required key".
+* Run linear search on the block.
+
 ## Todo: bloom filters
