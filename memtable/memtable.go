@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	memtableSizeLimit = 400 // 100 bytes for testing (for now)
+	memtableSizeLimit = 100 // 100 bytes for testing (for now)
 )
 
 type Memtable struct {
@@ -59,6 +59,10 @@ func (m *Memtable) Put(key, value string) {
 
 func (m *Memtable) ShouldFlush() bool {
 	return m.size >= memtableSizeLimit
+}
+
+func (m *Memtable) GetSize() int {
+	return m.size
 }
 
 func (m *Memtable) Clear() {

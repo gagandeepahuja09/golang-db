@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	ssTableMaxBlockLength = 4000 // 4 KB
+	ssTableMaxBlockLengthDefaultValue = 4000 // 4 KB
 
 	errWhileReadingIndexBlock    = "error while reading index block"
 	potentialIndexBlockCorrupted = "index block seems incomplete or corrupted"
@@ -28,10 +28,11 @@ type indexBlockEntry struct {
 }
 
 type DB struct {
-	walFile        *os.File
-	memTable       memtable.Memtable
-	ssTableFiles   []*os.File
-	ssTableIndexes [][]indexBlockEntry
+	walFile               *os.File
+	memTable              memtable.Memtable
+	ssTableFiles          []*os.File
+	ssTableIndexes        [][]indexBlockEntry
+	ssTableMaxBlockLength int
 }
 
 func (db *DB) cmdGet(args []string) {
@@ -61,7 +62,7 @@ func (db *DB) cmdPut(args []string) error {
 
 	if db.memTable.ShouldFlush() {
 		// todo: log for error
-		db.flushMemtableToSsTable()
+		return db.flushMemtableToSsTable()
 	}
 	return nil
 }
@@ -95,7 +96,7 @@ func (db *DB) flushMemtableToSsTable() error {
 		offset += len(ssTableEntry)
 		blockLength += len(ssTableEntry)
 		ssTableBlock = ssTableBlock + ssTableEntry
-		if blockLength > ssTableMaxBlockLength {
+		if blockLength > db.ssTableMaxBlockLength {
 			// one data block completed
 
 			// add relevant details to indexBlock
@@ -142,6 +143,16 @@ func (db *DB) flushMemtableToSsTable() error {
 	db.memTable.Clear()
 	db.walFile.Truncate(0)
 	db.walFile.Seek(0, 0)
+
+	// 3. Update ssTables
+	db.ssTableFiles = append(db.ssTableFiles, file)
+
+	// 4. Update ssTableIndexes
+	ssTableIndex, err := buildSsTableIndexFromFile(file)
+	if err != nil {
+		return err
+	}
+	db.ssTableIndexes = append(db.ssTableIndexes, ssTableIndex)
 
 	return nil
 }
@@ -251,16 +262,7 @@ func buildMemtableFromWal() (*DB, error) {
 	}
 }
 
-func buildSsTableIndexFromFile(filePath string) ([]indexBlockEntry, error) {
-	file, err := os.OpenFile(filePath, os.O_RDONLY, 0644)
-	if os.IsNotExist(err) {
-		return nil, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
+func buildSsTableIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
 	// 1. read footer and get the index offset
 	info, err := os.Stat("ss_table/l0")
 	fileSize := info.Size()
@@ -307,23 +309,37 @@ func buildSsTableIndexFromFile(filePath string) ([]indexBlockEntry, error) {
 	return ssTableIndex, nil
 }
 
-func buildSsTableIndexes() ([][]indexBlockEntry, error) {
+func buildSsTableIndexes(files []*os.File) ([][]indexBlockEntry, error) {
 	ssTableIndexes := [][]indexBlockEntry{}
-	// iteratively ready all SSTable files
-	if err := os.MkdirAll("ss_table/l0", 0755); err != nil {
-		return nil, err
-	}
-	// todo: os.Entries might be a better approach if there are frequent deletes due to compaction
-	for i := 0; ; i++ {
-		// todo: move this to a function
-		filePath := fmt.Sprintf("ss_table/l0/l0_%d.log", i)
-		ssTableIndex, err := buildSsTableIndexFromFile(filePath)
-		if os.IsNotExist(err) {
-			break
+	for _, file := range files {
+		ssTableIndex, err := buildSsTableIndexFromFile(file)
+		if err != nil {
+			return nil, err
 		}
 		ssTableIndexes = append(ssTableIndexes, ssTableIndex)
 	}
 	return ssTableIndexes, nil
+}
+
+func getSsTableFiles() ([]*os.File, error) {
+	if err := os.MkdirAll("ss_table/l0", 0755); err != nil {
+		return nil, err
+	}
+	ssTableFiles := []*os.File{}
+	// todo: os.Entries might be a better approach if there are frequent deletes due to compaction
+	for i := 0; ; i++ {
+		filePath := fmt.Sprintf("ss_table/l0/l0_%d.log", i)
+		file, err := os.OpenFile(filePath, os.O_RDONLY, 0644)
+		// as per current design, if a file is not found for l0_0, it won't also be present
+		// for l0_1.
+		if os.IsNotExist(err) {
+			return ssTableFiles, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ssTableFiles = append(ssTableFiles, file)
+	}
 }
 
 func getDbEntity() (*DB, error) {
@@ -331,8 +347,12 @@ func getDbEntity() (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.walFile.Close()
-	ssTableIndexes, err := buildSsTableIndexes()
+	db.ssTableMaxBlockLength = ssTableMaxBlockLengthDefaultValue
+
+	ssTableFiles, err := getSsTableFiles()
+	db.ssTableFiles = ssTableFiles
+
+	ssTableIndexes, err := buildSsTableIndexes(ssTableFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -342,8 +362,9 @@ func getDbEntity() (*DB, error) {
 
 func main() {
 	db, err := getDbEntity()
+	defer db.walFile.Close()
 	if err != nil {
-		log.Fatal("Error while setting up DB")
+		log.Fatal("Error while setting up DB: ", err.Error())
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
