@@ -110,6 +110,16 @@ ok, for simplicity, I am thinking of starting the implementation with only 1 lev
 * Logic for flushing memtable to sstable in the correct block based format with index and footer block (d)
 * Logic for loading the sstable indexes in-memory during application startup. (d)
 * Write a test which calls flushMemtableToSsTable first and then calls buildSsTableIndexes. Assert the output of buildSsTableIndexes. (wip)
+    * Tests were failing with build errors because go test first runs go vet but this behaviour is not there during go run and go build.
+    * So technically, passing a map does compile - it's valid Go code. The map is just treated as a single any argument.
+        The issue is that go vet has a static analysis checker specifically for slog that validates the semantic usage of those arguments. The slog package expects args to follow a specific pattern:
+        Alternating key-value pairs: "key1", value1, "key2", value2, ...
+        Or slog.Attr values: slog.String("key", "value"), slog.Int("count", 42)
+    * I had missed not writing the footer.
+    * I had put incorrect file name in os.Stat.
+    * I was missing to not add the last data block.
+* Above are fixed now.
+
 
 ### Logic for reading SSTable
 * Check the index offset from footer.

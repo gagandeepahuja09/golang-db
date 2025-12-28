@@ -83,7 +83,6 @@ func (db *DB) flushMemtableToSsTable() error {
 	// 1.2 Identify 4kB blocks, write them and build up the struct for index block
 	blockLength := 0
 	blockStartOffset := 0
-	indexBlockStartOffset := 0
 	blockFirstKey := ""
 	ssTableBlock := ""
 	offset := 0
@@ -106,8 +105,6 @@ func (db *DB) flushMemtableToSsTable() error {
 				offset: blockStartOffset,
 			})
 
-			indexBlockStartOffset += blockStartOffset
-
 			// write this data block to the file
 			// todo: change data block entry to [length][payload][checksum]xx
 			// instead of "PUT key value\n"
@@ -124,12 +121,22 @@ func (db *DB) flushMemtableToSsTable() error {
 		}
 	})
 
+	// add last data block
+	indexBlock = append(indexBlock, indexBlockEntry{
+		key:    blockFirstKey,
+		offset: blockStartOffset,
+	})
+	file.Write([]byte(ssTableBlock))
+
+	indexBlockStartOffset := offset
+
 	// 1.3 Write index blocks
 	for _, ib := range indexBlock {
-		indexBuf := make([]byte, 4+len(ib.key)+4)
-		binary.BigEndian.PutUint32(indexBuf[0:4], uint32(len(ib.key)))
-		copy(indexBuf[4:4+len(ib.key)], []byte(ib.key))
-		binary.BigEndian.PutUint32(indexBuf[4+len(ib.key):], uint32(ib.offset))
+		keyLength := len(ib.key)
+		indexBuf := make([]byte, 4+keyLength+4)
+		binary.BigEndian.PutUint32(indexBuf[0:4], uint32(keyLength))
+		copy(indexBuf[4:4+keyLength], []byte(ib.key))
+		binary.BigEndian.PutUint32(indexBuf[4+keyLength:], uint32(ib.offset))
 		if _, err := file.Write(indexBuf); err != nil {
 			return err
 		}
@@ -138,6 +145,7 @@ func (db *DB) flushMemtableToSsTable() error {
 	// 1.4 Write footer
 	footerBuf := make([]byte, 4)
 	binary.BigEndian.PutUint32(footerBuf[0:4], uint32(indexBlockStartOffset))
+	file.Write(footerBuf)
 
 	// 2. Clear the memtable and WAL
 	db.memTable.Clear()
@@ -168,9 +176,7 @@ func (db *DB) writeToWal(key, value string) error {
 	// 3. add checksum
 	binary.BigEndian.PutUint32(buf[4+len(cmd):], checksum)
 	if _, err := db.walFile.Write(buf); err != nil {
-		slog.Error("WAL_WRITE_FAILED", map[string]interface{}{
-			"error": err.Error(),
-		})
+		slog.Error("WAL_WRITE_FAILED", "error", err.Error())
 		return err
 	}
 	return db.walFile.Sync()
@@ -230,9 +236,7 @@ func readEntry(file *os.File) (payload []byte, err error) {
 func buildMemtableFromWal() (*DB, error) {
 	file, err := os.OpenFile("wal.log", os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		slog.Error("WAL_FILE_OPEN_FAILED", map[string]interface{}{
-			"error": err.Error(),
-		})
+		slog.Error("WAL_FILE_OPEN_FAILED", "error", err.Error())
 		return nil, err
 	}
 	db := &DB{
@@ -264,7 +268,7 @@ func buildMemtableFromWal() (*DB, error) {
 
 func buildSsTableIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
 	// 1. read footer and get the index offset
-	info, err := os.Stat("ss_table/l0")
+	info, err := os.Stat(file.Name())
 	fileSize := info.Size()
 	footerOffset := fileSize - 4
 	indexOffsetBuf := make([]byte, 4)
