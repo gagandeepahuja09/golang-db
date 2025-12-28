@@ -26,20 +26,20 @@ func TestSsTableIndex(t *testing.T) {
 	db.ssTableMaxBlockLength = 200
 	db.memTable = buildMemtableTestData()
 	err = db.flushMemtableToSsTable()
-	fmt.Printf("err111: %v\n", err)
 	assert.NoError(t, err)
 
-	fmt.Printf("db.ssTableFiles: %+v\n", db.ssTableFiles)
+	value, err := db.cmdGet([]string{"GET", "key_101"})
+	assert.NoError(t, err)
+	assert.Equal(t, "value_101", value)
 
-	fmt.Printf("db.ssTableIndexes: %+v\n", db.ssTableIndexes)
+	_, err = db.cmdGet([]string{"GET", "key_1010"})
+	assert.Equal(t, "No value found for GET key_1010", err.Error())
 
-	db.cmdGet([]string{"GET", "key_101"})
+	_, err = db.cmdGet([]string{"GET", "key_10100"})
+	assert.Equal(t, "No value found for GET key_10100", err.Error())
 
-	db.cmdGet([]string{"GET", "key_1010"})
-
-	db.cmdGet([]string{"GET", "key_10100"})
-
-	db.cmdGet([]string{"GET", "key_121"})
+	value, err = db.cmdGet([]string{"GET", "key_121"})
+	assert.Equal(t, "value_121", value)
 
 	// 3. delete the sstable file
 }

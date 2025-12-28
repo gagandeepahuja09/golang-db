@@ -3,26 +3,26 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 )
 
-func (db *DB) cmdGet(args []string) {
+func (db *DB) cmdGet(args []string) (string, error) {
 	if len(args) != 2 {
-		fmt.Fprint(os.Stderr, "Expected exactly 1 argument for GET command\n")
-		return
+		return "", errors.New("Expected exactly 1 argument for GET command\n")
 	}
 	key := args[1]
 	value, ok := db.memTable.Get(key)
 	if !ok {
 		value, err := db.getValueFromSsTable(key)
 		if err != nil {
-			fmt.Printf("No value found for GET %s. Error: %s\n", key, err)
+			return "", fmt.Errorf("No value found for GET %s. Error: %s", key, err)
 		} else {
-			fmt.Printf("GET %s returned: %s\n", key, value)
+			if value == "" {
+				return "", fmt.Errorf("No value found for GET %s", key)
+			}
+			return value, nil
 		}
-	} else {
-		fmt.Printf("GET %s returned: %s\n", key, value)
 	}
+	return value, nil
 }
 
 func (db *DB) cmdPut(args []string) error {

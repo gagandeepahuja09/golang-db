@@ -356,7 +356,6 @@ func getValueFromSsTableDataBlock(ssTableFile *os.File, key string, dataBlockOff
 	}
 	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
 	for _, payload := range ssTableDataBlockEntries {
-		fmt.Printf("payload3333: %v\n", payload)
 		cmds := strings.Split(payload, " ")
 		if cmds[1] == key {
 			return cmds[2], nil
@@ -382,7 +381,7 @@ func (db *DB) getValueFromSsTable(key string) (string, error) {
 		return value, err
 		// need to read from the file
 	}
-	return "", errors.New("no value found in ss table")
+	return "", nil
 }
 
 func main() {
@@ -399,7 +398,13 @@ func main() {
 		breakLoop := false
 		switch cmd {
 		case "GET":
-			db.cmdGet(args)
+			value, err := db.cmdGet(args)
+			if err != nil {
+				fmt.Println(err)
+			} else {
+				fmt.Printf("GET %s returned: %s\n", args[1], value)
+			}
+
 		case "PUT":
 			err := db.cmdPut(args)
 			if err != nil {
