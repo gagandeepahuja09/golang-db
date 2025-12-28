@@ -35,38 +35,6 @@ type DB struct {
 	ssTableMaxBlockLength int
 }
 
-func (db *DB) cmdGet(args []string) {
-	if len(args) != 2 {
-		fmt.Fprint(os.Stderr, "Expected exactly 1 argument for GET command\n")
-		return
-	}
-	key := args[1]
-	value, ok := db.memTable.Get(key)
-	if !ok {
-		fmt.Printf("No value found for GET %s\n", key)
-	} else {
-		fmt.Printf("GET %s returned: %s\n", key, value)
-	}
-}
-
-func (db *DB) cmdPut(args []string) error {
-	if len(args) != 3 {
-		return errors.New("Expected exactly 2 arguments for PUT command\n")
-	}
-	key := args[1]
-	value := args[2]
-	if err := db.writeToWal(key, value); err != nil {
-		return errors.New("Something went wrong")
-	}
-	db.memTable.Put(key, value)
-
-	if db.memTable.ShouldFlush() {
-		// todo: log for error
-		return db.flushMemtableToSsTable()
-	}
-	return nil
-}
-
 func (db *DB) flushMemtableToSsTable() error {
 	// 1. Iterate through the memtable and insert all content in a new ss table file
 	numFiles := len(db.ssTableFiles)
@@ -362,6 +330,59 @@ func getDbEntity() (*DB, error) {
 	}
 	db.ssTableIndexes = ssTableIndexes
 	return db, nil
+}
+
+func getLowerBound(key string, index []indexBlockEntry) int {
+	low := 0
+	high := len(index) - 1
+	lowerBoundSliceIndex := -1
+	for low <= high {
+		mid := low + (high-low)/2
+		if index[mid].key <= key {
+			lowerBoundSliceIndex = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	return lowerBoundSliceIndex
+}
+
+func getValueFromSsTableDataBlock(ssTableFile *os.File, key string, dataBlockOffset, dataBlockMaxLength int) (string, error) {
+	ssTableDataBlockBuf := make([]byte, dataBlockMaxLength)
+	_, err := ssTableFile.ReadAt(ssTableDataBlockBuf, int64(dataBlockOffset))
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
+	for _, payload := range ssTableDataBlockEntries {
+		fmt.Printf("payload3333: %v\n", payload)
+		cmds := strings.Split(payload, " ")
+		if cmds[1] == key {
+			return cmds[2], nil
+		}
+	}
+	return "", nil
+}
+
+// todo: this needs to be moved to ssTable package
+func (db *DB) getValueFromSsTable(key string) (string, error) {
+	// newest File to oldest File
+	for i := len(db.ssTableFiles) - 1; i >= 0; i-- {
+		file := db.ssTableFiles[i]
+		ssTableIndex := db.ssTableIndexes[i]
+		lowerBoundSliceIndex := getLowerBound(key, ssTableIndex)
+		if lowerBoundSliceIndex == -1 {
+			continue
+		}
+		value, err := getValueFromSsTableDataBlock(file, key, ssTableIndex[lowerBoundSliceIndex].offset, db.ssTableMaxBlockLength)
+		if value == "" && err == nil {
+			continue
+		}
+		return value, err
+		// need to read from the file
+	}
+	return "", errors.New("no value found in ss table")
 }
 
 func main() {

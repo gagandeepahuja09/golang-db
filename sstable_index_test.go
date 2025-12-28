@@ -33,5 +33,13 @@ func TestSsTableIndex(t *testing.T) {
 
 	fmt.Printf("db.ssTableIndexes: %+v\n", db.ssTableIndexes)
 
+	db.cmdGet([]string{"GET", "key_101"})
+
+	db.cmdGet([]string{"GET", "key_1010"})
+
+	db.cmdGet([]string{"GET", "key_10100"})
+
+	db.cmdGet([]string{"GET", "key_121"})
+
 	// 3. delete the sstable file
 }
