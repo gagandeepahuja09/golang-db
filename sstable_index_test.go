@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func buildMemtableTestData() memtable.Memtable {
+func buildMemtableTestData() *memtable.Memtable {
 	memtable := memtable.NewMemtable()
 
 	for i := 0; memtable.GetSize() < 2000; i++ {
@@ -17,11 +17,11 @@ func buildMemtableTestData() memtable.Memtable {
 		memtable.Put(key, value)
 	}
 
-	return memtable
+	return &memtable
 }
 
 func TestSsTableIndex(t *testing.T) {
-	db, err := buildMemtableFromWal()
+	db, err := newDB("")
 	assert.NoError(t, err)
 	db.ssTableMaxBlockLength = 200
 	db.memTable = buildMemtableTestData()

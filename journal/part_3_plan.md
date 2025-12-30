@@ -33,7 +33,7 @@ flowchart TB
 
 ## Short-Term Goals (1-2 weeks)
 
-### 1. Complete SSTable Read Path
+### 1. Complete SSTable Read Path [Done]
 
 Currently writes work, but reads don't query SSTables. Implement:
 

@@ -5,14 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"log"
-	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/golang-db/memtable"
+	"github.com/golang-db/wal"
 )
 
 const (
@@ -28,8 +27,8 @@ type indexBlockEntry struct {
 }
 
 type DB struct {
-	walFile               *os.File
-	memTable              memtable.Memtable
+	wal                   *wal.Wal
+	memTable              *memtable.Memtable
 	ssTableFiles          []*os.File
 	ssTableIndexes        [][]indexBlockEntry
 	ssTableMaxBlockLength int
@@ -117,8 +116,7 @@ func (db *DB) flushMemtableToSsTable() error {
 
 	// 2. Clear the memtable and WAL
 	db.memTable.Clear()
-	db.walFile.Truncate(0)
-	db.walFile.Seek(0, 0)
+	db.wal.Clear()
 
 	// 3. Update ssTables
 	db.ssTableFiles = append(db.ssTableFiles, file)
@@ -134,88 +132,16 @@ func (db *DB) flushMemtableToSsTable() error {
 }
 
 func (db *DB) writeToWal(key, value string) error {
-	cmd := fmt.Sprintf("PUT %s %s\n", key, value)
-	buf := make([]byte, 4+len(cmd)+4)
-	checksum := crc32.ChecksumIEEE([]byte(cmd))
-	// 1. add length
-	binary.BigEndian.PutUint32(buf[0:4], uint32(len(cmd)))
-	// 2. add cmd / payload
-	copy(buf[4:4+len(cmd)], []byte(cmd))
-	// 3. add checksum
-	binary.BigEndian.PutUint32(buf[4+len(cmd):], checksum)
-	if _, err := db.walFile.Write(buf); err != nil {
-		slog.Error("WAL_WRITE_FAILED", "error", err.Error())
-		return err
-	}
-	return db.walFile.Sync()
+	payload := fmt.Sprintf("PUT %s %s\n", key, value)
+	return db.wal.WriteEntry(payload)
 }
 
-func readEntry(file *os.File) (payload []byte, err error) {
-	// 1. Read Length (4 bytes)
-	lengthBuf := make([]byte, 4)
-	_, err = io.ReadFull(file, lengthBuf)
-	if err == io.EOF {
-		return nil, io.EOF
-	}
-	if err == io.ErrUnexpectedEOF {
-		return nil, errors.New("partial write: incomplete length")
-	}
-	if err != nil {
-		return nil, err
-	}
-	// 2. Parse Length
-	payloadLength := binary.BigEndian.Uint32(lengthBuf)
-
-	// 3. Sanity Check
-	if payloadLength > 1_000_000 { // 1 MB max
-		return nil, errors.New("corrupt: length too large")
-	}
-
-	// 4. Read payload
-	payload = make([]byte, payloadLength)
-	_, err = io.ReadFull(file, payload)
-	if err == io.ErrUnexpectedEOF {
-		return nil, errors.New("partial write: incomplete payload")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// 5. Read checksum
-	checksumBuf := make([]byte, 4)
-	_, err = io.ReadFull(file, checksumBuf)
-	if err == io.ErrUnexpectedEOF {
-		return nil, errors.New("partial write: incomplete checksum")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// 6. Verify checksum
-	storedChecksum := binary.BigEndian.Uint32(checksumBuf)
-	computedChecksum := crc32.ChecksumIEEE(payload)
-	if storedChecksum != computedChecksum {
-		return nil, errors.New("corrupt: checksum mismatch")
-	}
-
-	return payload, err
-}
-
-func buildMemtableFromWal() (*DB, error) {
-	file, err := os.OpenFile("wal.log", os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		slog.Error("WAL_FILE_OPEN_FAILED", "error", err.Error())
-		return nil, err
-	}
-	db := &DB{
-		walFile:  file,
-		memTable: memtable.NewMemtable(),
-	}
-
+func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
+	memTable := memtable.NewMemtable()
 	for {
-		payload, err := readEntry(file)
+		payload, err := db.wal.ReadEntry()
 		if err == io.EOF {
-			return db, nil
+			return &memTable, nil
 		}
 		// for now, I will abort even in case of partial write
 		// todo: in case of partial write we should just truncate that log.
@@ -230,7 +156,7 @@ func buildMemtableFromWal() (*DB, error) {
 		}
 		key := args[1]
 		value := args[2]
-		db.memTable.Put(key, value)
+		memTable.Put(key, value)
 	}
 }
 
@@ -314,11 +240,20 @@ func getSsTableFiles() ([]*os.File, error) {
 	}
 }
 
-func getDbEntity() (*DB, error) {
-	db, err := buildMemtableFromWal()
+func newDB(walFilePath string) (*DB, error) {
+	db := DB{}
+	wal, err := wal.NewWal("")
 	if err != nil {
 		return nil, err
 	}
+	db.wal = wal
+
+	memTable, err := db.buildMemtableFromWal()
+	if err != nil {
+		return nil, err
+	}
+	db.memTable = memTable
+
 	db.ssTableMaxBlockLength = ssTableMaxBlockLengthDefaultValue
 
 	ssTableFiles, err := getSsTableFiles()
@@ -329,7 +264,7 @@ func getDbEntity() (*DB, error) {
 		return nil, err
 	}
 	db.ssTableIndexes = ssTableIndexes
-	return db, nil
+	return &db, nil
 }
 
 func getLowerBound(key string, index []indexBlockEntry) int {
@@ -385,8 +320,8 @@ func (db *DB) getValueFromSsTable(key string) (string, error) {
 }
 
 func main() {
-	db, err := getDbEntity()
-	defer db.walFile.Close()
+	db, err := newDB("")
+	defer db.wal.Close()
 	if err != nil {
 		log.Fatal("Error while setting up DB: ", err.Error())
 	}

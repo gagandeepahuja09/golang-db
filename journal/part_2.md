@@ -128,3 +128,8 @@ ok, for simplicity, I am thinking of starting the implementation with only 1 lev
 * Run linear search on the block.
 
 ## Todo: bloom filters
+
+## Benchmarking for performance
+* SS Table with index solution.
+* Everything in WAL solution.
+* Fallback of memTable as ssTable instead of fallback as wal.
