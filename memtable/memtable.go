@@ -36,6 +36,7 @@ func (m *Memtable) Get(key string) (string, bool) {
 	return item.(*Entry).Value, true
 }
 
+// Iterate loops through each of the key, value pair in the memTable
 func (m *Memtable) Iterate(fn func(key, value string)) {
 	m.tree.Ascend(func(item btree.Item) bool {
 		e := item.(*Entry)

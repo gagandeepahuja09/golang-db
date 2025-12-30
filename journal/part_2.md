@@ -127,7 +127,9 @@ ok, for simplicity, I am thinking of starting the implementation with only 1 lev
 * Run binary search for getting the appropriate block which has key <= "required key".
 * Run linear search on the block.
 
-## Todo: bloom filters
+## Todo
+* what is write amplification?
+* bloom filters
 
 ## Benchmarking for performance
 * SS Table with index solution.

@@ -23,9 +23,8 @@ func buildMemtableTestData() *memtable.Memtable {
 func TestSsTableIndex(t *testing.T) {
 	db, err := newDB("")
 	assert.NoError(t, err)
-	db.ssTableMaxBlockLength = 200
 	db.memTable = buildMemtableTestData()
-	err = db.flushMemtableToSsTable()
+	err = db.createSsTableAndClearWalAndMemTable()
 	assert.NoError(t, err)
 
 	value, err := db.cmdGet([]string{"GET", "key_101"})
@@ -40,6 +39,16 @@ func TestSsTableIndex(t *testing.T) {
 
 	value, err = db.cmdGet([]string{"GET", "key_121"})
 	assert.Equal(t, "value_121", value)
+
+	for i := 0; i <= 101; i++ {
+		value, err = db.cmdGet([]string{"GET", fmt.Sprintf("key_%d", i)})
+		assert.Equal(t, fmt.Sprintf("value_%d", i), value)
+	}
+
+	for i := 600; i <= 700; i++ {
+		_, err = db.cmdGet([]string{"GET", fmt.Sprintf("key_%d", i)})
+		assert.Equal(t, fmt.Sprintf("No value found for GET key_%d", i), err.Error())
+	}
 
 	// 3. delete the sstable file
 }
