@@ -128,10 +128,36 @@ ok, for simplicity, I am thinking of starting the implementation with only 1 lev
 * Run linear search on the block.
 
 ## Todo
+* Seeing flaky nature in tests. Sometimes they are failing.
+    * Identified 2 issues: Issue with the last block.
+        * Don't write last block if size is 0. [Done]
+        * Since last block can also have size > limit, track the indexOffset also in map for effective search [Todo]
 * what is write amplification?
 * bloom filters
 
 ## Benchmarking for performance
 * SS Table with index solution.
-* Everything in WAL solution.
-* Fallback of memTable as ssTable instead of fallback as wal.
+    * Fallback of memTable as ssTable instead of fallback as wal.
+    * Everything in WAL solution. ==> create another DB implementation which doesn't use SSTable and only writes to WAL. Each time memtable size limit is reached, we create a new WAL file. 
+
+* Result with 200 Loop
+go test -bench=.
+goos: darwin
+goarch: arm64
+pkg: github.com/golang-db
+cpu: Apple M1 Pro
+BenchmarkSSTableBinarySearchMixedWorkload-8          884           1333306 ns/op
+BenchmarkSSTableLinearSearchMixedWorkload-8          201           5716382 ns/op
+PASS
+ok      github.com/golang-db    5.704s
+
+* With 300 loop
+go test -bench=.
+goos: darwin
+goarch: arm64
+pkg: github.com/golang-db
+cpu: Apple M1 Pro
+BenchmarkSSTableBinarySearchMixedWorkload-8          744           1357287 ns/op
+BenchmarkSSTableLinearSearchMixedWorkload-8          145           8045538 ns/op
+PASS
+ok      github.com/golang-db    6.043s

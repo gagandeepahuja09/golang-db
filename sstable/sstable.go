@@ -28,18 +28,26 @@ type SsTable struct {
 	firstLevelFiles    []*os.File
 	blockLength        int
 	indexBlocks        [][]indexBlockEntry
+	skipIndex          bool // added only for benchmarking. Default is that index will always be used
 }
 
-func NewSsTable(dataFilesDirectory string, blockLength int) (*SsTable, error) {
-	if dataFilesDirectory == "" {
-		dataFilesDirectory = dataFilesDefaultDirectory
+type Config struct {
+	DataFilesDirectory string
+	BlockLength        int
+	SkipIndex          bool
+}
+
+func NewSsTable(config Config) (*SsTable, error) {
+	if config.DataFilesDirectory == "" {
+		config.DataFilesDirectory = dataFilesDefaultDirectory
 	}
-	if blockLength == 0 {
-		blockLength = defaultBlockLength
+	if config.BlockLength == 0 {
+		config.BlockLength = defaultBlockLength
 	}
 	st := SsTable{
-		dataFilesDirectory: dataFilesDirectory,
-		blockLength:        blockLength,
+		dataFilesDirectory: config.DataFilesDirectory,
+		blockLength:        config.BlockLength,
+		skipIndex:          config.SkipIndex,
 		firstLevelFiles:    make([]*os.File, 0),
 		indexBlocks:        make([][]indexBlockEntry, 0),
 	}
@@ -50,6 +58,9 @@ func NewSsTable(dataFilesDirectory string, blockLength int) (*SsTable, error) {
 	}
 	st.firstLevelFiles = firstLevelFiles
 
+	if st.skipIndex {
+		return &st, err
+	}
 	indexBlocks, err := st.buildIndexes(st.firstLevelFiles)
 	st.indexBlocks = indexBlocks
 	return &st, err
@@ -79,15 +90,19 @@ func (st *SsTable) Write(file *os.File, iteratorFunc func(fn func(key, value str
 	if err != nil {
 		return err
 	}
-	if err = st.writeIndexBlock(file, indexBlock); err != nil {
-		return err
-	}
-	if err = st.writeFooter(file, indexOffset); err != nil {
-		return err
+	if !st.skipIndex {
+		if err = st.writeIndexBlock(file, indexBlock); err != nil {
+			return err
+		}
+		if err = st.writeFooter(file, indexOffset); err != nil {
+			return err
+		}
 	}
 
 	st.firstLevelFiles = append(st.firstLevelFiles, file)
-	st.indexBlocks = append(st.indexBlocks, indexBlock)
+	if !st.skipIndex {
+		st.indexBlocks = append(st.indexBlocks, indexBlock)
+	}
 	return nil
 }
 
@@ -150,11 +165,13 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 	})
 
 	// add last data block
-	indexBlock = append(indexBlock, indexBlockEntry{
-		key:    blockFirstKey,
-		offset: blockStartOffset,
-	})
-	_, err = file.Write([]byte(ssTableBlock))
+	if blockFirstKey != "" {
+		indexBlock = append(indexBlock, indexBlockEntry{
+			key:    blockFirstKey,
+			offset: blockStartOffset,
+		})
+		_, err = file.Write([]byte(ssTableBlock))
+	}
 	return offset, indexBlock, err
 }
 
@@ -253,6 +270,9 @@ func buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
 }
 
 func (st *SsTable) Get(key string) (string, error) {
+	if st.skipIndex {
+		return st.linearSearch(key)
+	}
 	// newest file to oldest file
 	for i := len(st.firstLevelFiles) - 1; i >= 0; i-- {
 		file := st.firstLevelFiles[i]
@@ -263,6 +283,8 @@ func (st *SsTable) Get(key string) (string, error) {
 		}
 		endOffset := ssTableIndex[lowerBoundSliceIndex].offset + st.blockLength
 		if lowerBoundSliceIndex < len(ssTableIndex)-1 {
+			// todo: it is safer to have endOffset as start of index offset.
+			// this can potentially lead to issue as more than
 			endOffset = ssTableIndex[lowerBoundSliceIndex+1].offset
 		}
 		value, err := st.getValueFromSsTableDataBlock(file, key,
@@ -308,4 +330,36 @@ func getLowerBound(key string, index []indexBlockEntry) int {
 		}
 	}
 	return lowerBoundSliceIndex
+}
+
+func (st *SsTable) linearSearch(key string) (string, error) {
+	for i := len(st.firstLevelFiles) - 1; i >= 0; i-- {
+		file := st.firstLevelFiles[i]
+		value, err := st.linearSearchFile(file, key)
+		if err != nil || value != "" {
+			return value, err
+		}
+	}
+	return "", nil
+}
+
+func (st *SsTable) linearSearchFile(file *os.File, key string) (string, error) {
+	stat, _ := file.Stat()
+	fileSize := stat.Size()
+	buf := make([]byte, fileSize)
+	_, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	entries := strings.Split(string(buf), "\n")
+	for _, payload := range entries {
+		cmds := strings.Split(payload, " ")
+		if len(cmds) < 2 {
+			continue
+		}
+		if cmds[1] == key {
+			return cmds[2], nil
+		}
+	}
+	return "", nil
 }

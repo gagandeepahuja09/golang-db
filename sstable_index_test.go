@@ -16,7 +16,8 @@ func buildTestData(db *db.DB) {
 	}
 }
 
-func TestSsTableIndex(t *testing.T) {
+// we take large enough keys so that the flow can be tested for flushing memtable to sstable
+func TestGetAndPutInBulk(t *testing.T) {
 	db, err := db.NewDB(db.Config{})
 	assert.NoError(t, err)
 	buildTestData(db)
@@ -36,6 +37,7 @@ func TestSsTableIndex(t *testing.T) {
 
 	for i := 0; i <= 151; i++ {
 		value, err = db.Get(fmt.Sprintf("key_%d", i))
+		assert.NoError(t, err)
 		assert.Equal(t, fmt.Sprintf("value_%d", i), value)
 	}
 
