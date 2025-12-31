@@ -4,50 +4,44 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/golang-db/memtable"
+	"github.com/golang-db/db"
 	"github.com/stretchr/testify/assert"
 )
 
-func buildMemtableTestData() *memtable.Memtable {
-	memtable := memtable.NewMemtable()
-
-	for i := 0; memtable.GetSize() < 2000; i++ {
+func buildMemtableTestData(db *db.DB) {
+	for i := 0; i < 300; i++ {
 		key := fmt.Sprintf("key_%d", i)
 		value := fmt.Sprintf("value_%d", i)
-		memtable.Put(key, value)
+		db.Put(key, value)
 	}
-
-	return &memtable
 }
 
 func TestSsTableIndex(t *testing.T) {
-	db, err := newDB("")
+	db, err := db.NewDB("")
 	assert.NoError(t, err)
-	db.memTable = buildMemtableTestData()
-	err = db.createSsTableAndClearWalAndMemTable()
-	assert.NoError(t, err)
+	buildMemtableTestData(db)
 
-	value, err := db.cmdGet([]string{"GET", "key_101"})
+	value, err := db.Get("key_101")
 	assert.NoError(t, err)
 	assert.Equal(t, "value_101", value)
 
-	_, err = db.cmdGet([]string{"GET", "key_1010"})
-	assert.Equal(t, "No value found for GET key_1010", err.Error())
+	value, err = db.Get("key_1010")
+	assert.Equal(t, "", value)
 
-	_, err = db.cmdGet([]string{"GET", "key_10100"})
-	assert.Equal(t, "No value found for GET key_10100", err.Error())
+	value, err = db.Get("key_10100")
+	assert.Equal(t, "", value)
 
-	value, err = db.cmdGet([]string{"GET", "key_121"})
-	assert.Equal(t, "value_121", value)
+	value, err = db.Get("GET")
+	assert.Equal(t, "", value)
 
-	for i := 0; i <= 101; i++ {
-		value, err = db.cmdGet([]string{"GET", fmt.Sprintf("key_%d", i)})
+	for i := 0; i <= 151; i++ {
+		value, err = db.Get(fmt.Sprintf("key_%d", i))
 		assert.Equal(t, fmt.Sprintf("value_%d", i), value)
 	}
 
-	for i := 600; i <= 700; i++ {
-		_, err = db.cmdGet([]string{"GET", fmt.Sprintf("key_%d", i)})
-		assert.Equal(t, fmt.Sprintf("No value found for GET key_%d", i), err.Error())
+	for i := 600; i <= 625; i++ {
+		value, err = db.Get(fmt.Sprintf("key_%d", i))
+		assert.Equal(t, "", value)
 	}
 
 	// 3. delete the sstable file

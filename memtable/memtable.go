@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	memtableSizeLimit = 100 // 100 bytes for testing (for now)
+	memtableSizeLimit = 1000 // 1 kb for testing (for now)
 )
 
 type Memtable struct {
