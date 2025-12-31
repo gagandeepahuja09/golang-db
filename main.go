@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	db, err := db.NewDB("")
+	db, err := db.NewDB(db.Config{})
 	defer db.Close()
 	if err != nil {
 		log.Fatal("Error while setting up DB: ", err.Error())

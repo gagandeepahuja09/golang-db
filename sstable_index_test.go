@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func buildMemtableTestData(db *db.DB) {
+func buildTestData(db *db.DB) {
 	for i := 0; i < 300; i++ {
 		key := fmt.Sprintf("key_%d", i)
 		value := fmt.Sprintf("value_%d", i)
@@ -17,9 +17,9 @@ func buildMemtableTestData(db *db.DB) {
 }
 
 func TestSsTableIndex(t *testing.T) {
-	db, err := db.NewDB("")
+	db, err := db.NewDB(db.Config{})
 	assert.NoError(t, err)
-	buildMemtableTestData(db)
+	buildTestData(db)
 
 	value, err := db.Get("key_101")
 	assert.NoError(t, err)

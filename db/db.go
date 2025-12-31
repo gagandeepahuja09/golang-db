@@ -17,9 +17,13 @@ type DB struct {
 	ssTable  *sstable.SsTable
 }
 
-func NewDB(walFilePath string) (*DB, error) {
+type Config struct {
+	SsTableConfig sstable.Config
+}
+
+func NewDB(config Config) (*DB, error) {
 	db := DB{}
-	wal, err := wal.NewWal(walFilePath)
+	wal, err := wal.NewWal("")
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +34,7 @@ func NewDB(walFilePath string) (*DB, error) {
 		return nil, err
 	}
 	db.memTable = memTable
-	db.ssTable, err = sstable.NewSsTable("", 0)
+	db.ssTable, err = sstable.NewSsTable(config.SsTableConfig)
 	return &db, nil
 }
 
