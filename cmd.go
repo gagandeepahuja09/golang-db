@@ -12,7 +12,7 @@ func (db *DB) cmdGet(args []string) (string, error) {
 	key := args[1]
 	value, ok := db.memTable.Get(key)
 	if !ok {
-		value, err := db.getValueFromSsTable(key)
+		value, err := db.ssTable.Get(key)
 		if err != nil {
 			return "", fmt.Errorf("No value found for GET %s. Error: %s", key, err)
 		} else {
@@ -37,8 +37,16 @@ func (db *DB) cmdPut(args []string) error {
 	db.memTable.Put(key, value)
 
 	if db.memTable.ShouldFlush() {
-		// todo: log for error
-		return db.flushMemtableToSsTable()
+		db.createSsTableAndClearWalAndMemTable()
 	}
+	return nil
+}
+
+func (db *DB) createSsTableAndClearWalAndMemTable() error {
+	if err := db.flushMemtableToSsTable(); err != nil {
+		return err
+	}
+	db.memTable.Clear()
+	db.wal.Clear()
 	return nil
 }
