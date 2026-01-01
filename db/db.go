@@ -80,7 +80,11 @@ func (db *DB) flushMemtableToSsTable() error {
 		return err
 	}
 
-	return db.ssTable.Write(ssTableFile, db.memTable.Iterate)
+	err = db.ssTable.Write(ssTableFile, db.memTable.Iterate)
+	if db.ssTable.ShouldRunCompaction() {
+		go db.ssTable.RunCompaction()
+	}
+	return err
 }
 
 func (db *DB) writeToWal(key, value string) error {

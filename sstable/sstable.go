@@ -29,6 +29,7 @@ type SsTable struct {
 	blockLength        int
 	indexBlocks        [][]indexBlockEntry
 	skipIndex          bool // added only for benchmarking. Default is that index will always be used
+	compacting         bool
 }
 
 type Config struct {
@@ -189,6 +190,7 @@ func (st *SsTable) writeIndexBlock(file *os.File, indexBlock []indexBlockEntry) 
 	return nil
 }
 
+// todo: now need to update here as there can be first level files also
 func (st *SsTable) getAllFirstLevelFilesFromDirectory() ([]*os.File, error) {
 	if err := os.MkdirAll(st.dataFilesDirectory, 0755); err != nil {
 		return nil, err
@@ -213,7 +215,7 @@ func (st *SsTable) getAllFirstLevelFilesFromDirectory() ([]*os.File, error) {
 func (st *SsTable) buildIndexes(files []*os.File) ([][]indexBlockEntry, error) {
 	ssTableIndexes := [][]indexBlockEntry{}
 	for _, file := range files {
-		ssTableIndex, err := buildIndexFromFile(file)
+		ssTableIndex, err := st.buildIndexFromFile(file)
 		if err != nil {
 			return nil, err
 		}
@@ -222,16 +224,28 @@ func (st *SsTable) buildIndexes(files []*os.File) ([][]indexBlockEntry, error) {
 	return ssTableIndexes, nil
 }
 
-func buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
-	// 1. read footer and get the index offset
+func (st *SsTable) getIndexOffset(file *os.File) (uint32, error) {
 	info, err := os.Stat(file.Name())
 	fileSize := info.Size()
 	footerOffset := fileSize - 4
 	indexOffsetBuf := make([]byte, 4)
 	if _, err = file.ReadAt(indexOffsetBuf, footerOffset); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint32(indexOffsetBuf), nil
+}
+
+func (st *SsTable) buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
+	// 1. get the index offset
+	info, err := os.Stat(file.Name())
+	if err != nil {
 		return nil, err
 	}
-	indexOffset := binary.BigEndian.Uint32(indexOffsetBuf)
+	fileSize := info.Size()
+	indexOffset, err := st.getIndexOffset(file)
+	if err != nil {
+		return nil, err
+	}
 
 	// 2. load index in-memory
 	// 2.1 read index byte array
@@ -354,9 +368,6 @@ func (st *SsTable) linearSearchFile(file *os.File, key string) (string, error) {
 	entries := strings.Split(string(buf), "\n")
 	for _, payload := range entries {
 		cmds := strings.Split(payload, " ")
-		if len(cmds) < 2 {
-			continue
-		}
 		if cmds[1] == key {
 			return cmds[2], nil
 		}
