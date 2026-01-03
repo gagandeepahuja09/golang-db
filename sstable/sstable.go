@@ -55,6 +55,7 @@ func NewSsTable(config Config) (*SsTable, error) {
 		skipIndex:          config.SkipIndex,
 		firstLevelFiles:    make([]*os.File, 0),
 		indexBlocks:        make([][]indexBlockEntry, 0),
+		mutex:              sync.RWMutex{},
 	}
 
 	directoryMetadata, err := st.getDirectoryMetadata()
@@ -217,6 +218,7 @@ func (st *SsTable) writeIndexBlock(file *os.File, indexBlock []indexBlockEntry) 
 // directoryMetadata.manifest.
 // 2. Opens all sstable log files and populates in directoryMetadata.firstLevelFiles
 func (st *SsTable) getDirectoryMetadata() (directoryMetadata *SsTable, err error) {
+	directoryMetadata = &SsTable{}
 	if err := os.MkdirAll(st.dataFilesDirectory, 0755); err != nil {
 		return nil, err
 	}

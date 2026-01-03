@@ -2,11 +2,12 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+
+	"errors"
 
 	"github.com/golang-db/db"
 )
@@ -27,6 +28,8 @@ func main() {
 		case "GET":
 			value, err := cmdGet(db, args)
 			if err != nil {
+				// todo: error messaging not good for not found cases right now. It should not
+				// have error prefix
 				fmt.Printf("Error while performing GET operation: '%s'\n", err.Error())
 			} else {
 				fmt.Printf("GET %s returned: %s\n", args[1], value)

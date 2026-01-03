@@ -110,3 +110,5 @@ type SsTable struct {
 
 ## Proper perf testing what I have built [Todo]
 
+### Todo: Propagating stack trace is not very good in golang
+- Go's standard error type doesn't carry stack traces - it's just a string.

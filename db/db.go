@@ -35,7 +35,7 @@ func NewDB(config Config) (*DB, error) {
 	}
 	db.memTable = memTable
 	db.ssTable, err = sstable.NewSsTable(config.SsTableConfig)
-	return &db, nil
+	return &db, err
 }
 
 func (db *DB) Close() {

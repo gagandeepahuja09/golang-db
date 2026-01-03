@@ -15,13 +15,17 @@ type manifest struct {
 }
 
 func (st *SsTable) getManifest() (*manifest, error) {
-	filePath := fmt.Sprintf("%s/%d", st.dataFilesDirectory, manifestJsonFileName)
+	filePath := fmt.Sprintf("%s/%s", st.dataFilesDirectory, manifestJsonFileName)
 	manifestJsonFile, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 	fileInfo, _ := manifestJsonFile.Stat()
-	manifestBuf := make([]byte, fileInfo.Size())
+	fileSize := fileInfo.Size()
+	if fileSize == 0 {
+		return &manifest{}, nil
+	}
+	manifestBuf := make([]byte, fileSize)
 	manifestJsonFile.Read(manifestBuf)
 	if err != nil {
 		return nil, err
@@ -37,7 +41,7 @@ func (st *SsTable) saveManifest() error {
 	if err != nil {
 		return err
 	}
-	filePath := fmt.Sprintf("%s/%d", st.dataFilesDirectory, manifestJsonFileName)
+	filePath := fmt.Sprintf("%s/%s", st.dataFilesDirectory, manifestJsonFileName)
 	err = os.WriteFile(filePath, manifestJsonBuf, 0644)
 	return err
 }
@@ -46,7 +50,7 @@ func (st *SsTable) getAllLogFiles() ([]*os.File, error) {
 	fileNames := st.manifest.FileNames
 	ssTableFiles := []*os.File{}
 	for _, fileName := range fileNames {
-		filePath := fmt.Sprintf("%s/%d", st.dataFilesDirectory, fileName)
+		filePath := fmt.Sprintf("%s/%s", st.dataFilesDirectory, fileName)
 		file, err := os.OpenFile(filePath, os.O_RDONLY, 0644)
 		if err != nil {
 			return nil, err
