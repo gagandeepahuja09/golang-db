@@ -4,6 +4,7 @@ package sstable
 // functions
 import (
 	"log/slog"
+	"os"
 	"strings"
 )
 
@@ -13,8 +14,7 @@ func (st *SsTable) ShouldRunCompaction() bool {
 
 // builds a compactedMap formed from all the key value pairs present in the files.
 // we go from the oldest file to the newest one to ensure that the key has the most up-to-date value.
-func (st *SsTable) getCompactedMap() (map[string]string, error) {
-	files := st.firstLevelFiles
+func (st *SsTable) getCompactedMap(files []*os.File) (map[string]string, error) {
 	var compactedMap map[string]string
 	for _, file := range files {
 		indexOffset, err := st.getIndexOffset(file)
@@ -39,7 +39,11 @@ func (st *SsTable) getCompactedMap() (map[string]string, error) {
 
 func (st *SsTable) RunCompaction() {
 	// 1. build compacted map
-	compactedMap, err := st.getCompactedMap()
+	var filesToCompact []*os.File
+	st.mutex.RLock()
+	copy(filesToCompact, st.firstLevelFiles)
+	st.mutex.RUnlock()
+	compactedMap, err := st.getCompactedMap(filesToCompact)
 	if err != nil {
 		slog.Error("COMPACTED_MAP_BUILD_FAILED", "error", err.Error())
 	}
@@ -58,7 +62,49 @@ func (st *SsTable) RunCompaction() {
 	// 4. write to the compacted file
 	compactedFile, err := st.NewFile()
 	if err != nil {
-		slog.Error("COMPACTED_FILE_CREATION_FAILED", "error", err.Error())
+		slog.Error("COMPACTED_FILE_CREATE_FAILED", "error", err.Error())
 	}
-	st.Write(compactedFile, iterator)
+	compactedIndexBlock, err := st.writeToFile(compactedFile, iterator)
+	if err != nil {
+		slog.Error("COMPACTED_FILE_WRITE_FAILED", "error", err.Error())
+	}
+
+	// 5. atomic swap of files array and indexes array
+	st.atomicSwap(compactedFile, filesToCompact, compactedIndexBlock)
+
+	// 6. delete old files
+}
+
+// takes the compacted file, old files array and current state of files array to construct the new
+// ssTables array and sets it.
+// similar behaviour done for indexes array.
+func (st *SsTable) atomicSwap(compactedFile *os.File, oldFiles []*os.File, compactedIndexBlock []indexBlockEntry) {
+	st.mutex.Lock()
+	defer st.mutex.Unlock()
+
+	var oldFilesMap map[string]bool
+
+	for _, file := range oldFiles {
+		oldFilesMap[file.Name()] = true
+	}
+
+	currentFiles := st.firstLevelFiles
+
+	swappedFiles := []*os.File{compactedFile}
+	fileNames := []string{compactedFile.Name()}
+	swappedIndexBlocks := [][]indexBlockEntry{compactedIndexBlock}
+
+	for i, file := range currentFiles {
+		if !oldFilesMap[file.Name()] {
+			swappedFiles = append(swappedFiles, file)
+			swappedIndexBlocks = append(swappedIndexBlocks, st.indexBlocks[i])
+			fileNames = append(fileNames, file.Name())
+		}
+	}
+
+	st.firstLevelFiles = swappedFiles
+	st.indexBlocks = swappedIndexBlocks
+
+	st.manifest.FileNames = fileNames
+	st.saveManifest()
 }

@@ -74,6 +74,39 @@ type SsTable struct {
 
 ### Phase 6: Delete old files
 
+### Handling race conditions: 
+
+#### First level files and indexes are shared variable between Compaction and Get, Write
+**Locks in Compaction Flow**
+- Eg. let's say you have 4 files for compaction and you started compaction. By the time you were about to write the compacted files, another file came which was not part of your compaction.
+- Hence before starting compaction, we should take a **read lock to get what all files are covered** ==> **filesToCompact**.
+- During **atomic swap, we take a write lock** and utilise **filesToCompact** ==> oldSet and **newCompactedFile** and **st.firstLevelFiles** to construct our files.
+- This is applicable for both files and index.
+
+**Lock in Get and Write**
+* Get ==> RLock throughout the function
+    * This is also necessary to ensure that write lock is acquired only once all readers have released the lock. This will help ensure that readers are reading from non-compacted version before release and compacted version after the compaction write is done.
+* Write ==> Where firstLevelFiles and indexes is getting updated.
+
+**Handling impact of file deletions on existing logic**
+* getAllFirstLevelFilesFromDirectory ==> needs to be updated now
+    * after initialisation, maintain nextFile.
+* NewFile needs to be updated now
+
+### Manifest.json to the rescue
+* We will keep on adding files in a auto-increment way. But the file ID will not be the actual indicator of the order of the file.
+* For that we will create a **manifest.json** file.
+{
+    "nextFileId": 6
+    "files": ["5.log", "4.log"] ==> older the file, earlier it is placed in the array. 5.json can be older. eg. in the compaction case file can be inserted later but it is actually an older file.
+}
+* Changes required:
+    * Populate files array and nextFileId from manifest.json during application startup.
+    * Update manifest.json when Write function OR when atomicSwap is called.
+
+**Todo: how do we write tests to ensure that our application is safe of these race conditions?**
 
 ## Metrics [Todo: after V1 implementation]
+
+## Proper perf testing what I have built [Todo]
 
