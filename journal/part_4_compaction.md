@@ -29,6 +29,7 @@
 
 ## What will be the appropriate time for file deletion after compaction?
 - Readers will continue reading the old file. How will we ensure that they stop reading after we are done with the compaction?
+    - Achieved via locks. All reads will have read lock and only when all read locks are released, we will start with compaction and acquire write lock.
 
 ## HLD
 
@@ -107,6 +108,10 @@ type SsTable struct {
 **Todo: how do we write tests to ensure that our application is safe of these race conditions?**
     - Need to add a test for scenario where writes are going on even during compaction.
 **Todo: Prepare a test plan for functional tests**
+**Todo: performance improvement**
+    - Mutex locks
+    - Iterator
+    - File reads
 
 ## Metrics [Todo: after V1 implementation]
 

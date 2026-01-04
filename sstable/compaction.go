@@ -14,7 +14,7 @@ func (st *SsTable) ShouldRunCompaction() bool {
 
 // builds a compactedMap formed from all the key value pairs present in the files.
 // we go from the oldest file to the newest one to ensure that the key has the most up-to-date value.
-func (st *SsTable) getCompactedMap(files []*os.File) (map[string]string, error) {
+func (st *SsTable) buildCompactedMap(files []*os.File) (map[string]string, error) {
 	compactedMap := map[string]string{}
 	for _, file := range files {
 		indexOffset, err := st.getIndexOffset(file)
@@ -59,7 +59,7 @@ func (st *SsTable) RunCompaction() {
 	copy(filesToCompact, st.firstLevelFiles)
 	st.mutex.RUnlock()
 	slog.Info("COMPACTION_STARTED", "files_to_be_compacted_count", len(filesToCompact))
-	compactedMap, err := st.getCompactedMap(filesToCompact)
+	compactedMap, err := st.buildCompactedMap(filesToCompact)
 	if err != nil {
 		slog.Error("COMPACTED_MAP_BUILD_FAILED", "error", err.Error())
 	}
@@ -114,6 +114,7 @@ func (st *SsTable) atomicSwap(compactedFile *os.File, oldFiles []*os.File, compa
 
 	currentFiles := st.firstLevelFiles
 
+	// position is important, compactedFile is older than the newly created files
 	swappedFiles := []*os.File{compactedFile}
 	fileNames := []string{compactedFile.Name()}
 	swappedIndexBlocks := [][]indexBlockEntry{compactedIndexBlock}

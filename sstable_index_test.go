@@ -30,7 +30,7 @@ func TestGetAndPutInBulk(t *testing.T) {
 	assert.NoError(t, err)
 	buildTestData(db)
 
-	// let the old files delete
+	// let the old unrequired files which should now be compacted to a single file get delete
 	time.Sleep(4 * time.Second)
 
 	value, err := db.Get("key_101")
