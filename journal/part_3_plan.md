@@ -70,7 +70,7 @@ Currently writes work, but reads don't query SSTables. Implement:
 - Store bloom filter in SSTable file (before index block)
 - Query bloom filter before searching index
 
-### 6. Add Compaction
+### 6. Add Compaction [V1 Done]
 
 - Merge multiple L0 SSTables into one
 - Remove duplicate keys (keep newest)

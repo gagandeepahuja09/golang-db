@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 )
 
 const (
@@ -16,6 +17,7 @@ const (
 
 	errWhileReadingIndexBlock    = "error while reading index block"
 	potentialIndexBlockCorrupted = "index block seems incomplete or corrupted"
+	manifestJsonFileName         = "manifest.json"
 )
 
 type indexBlockEntry struct {
@@ -24,11 +26,14 @@ type indexBlockEntry struct {
 }
 
 type SsTable struct {
+	mutex              sync.RWMutex
 	dataFilesDirectory string
 	firstLevelFiles    []*os.File
 	blockLength        int
 	indexBlocks        [][]indexBlockEntry
+	manifest           manifest
 	skipIndex          bool // added only for benchmarking. Default is that index will always be used
+	compacting         bool
 }
 
 type Config struct {
@@ -50,13 +55,15 @@ func NewSsTable(config Config) (*SsTable, error) {
 		skipIndex:          config.SkipIndex,
 		firstLevelFiles:    make([]*os.File, 0),
 		indexBlocks:        make([][]indexBlockEntry, 0),
+		mutex:              sync.RWMutex{},
 	}
 
-	firstLevelFiles, err := st.getAllFirstLevelFilesFromDirectory()
+	directoryMetadata, err := st.getDirectoryMetadata()
 	if err != nil {
 		return nil, err
 	}
-	st.firstLevelFiles = firstLevelFiles
+	st.firstLevelFiles = directoryMetadata.firstLevelFiles
+	st.manifest = directoryMetadata.manifest
 
 	if st.skipIndex {
 		return &st, err
@@ -68,16 +75,15 @@ func NewSsTable(config Config) (*SsTable, error) {
 
 // create a new first level file
 func (st *SsTable) NewFile() (*os.File, error) {
-	numFiles := len(st.firstLevelFiles)
 	if err := os.MkdirAll(st.dataFilesDirectory, 0755); err != nil {
 		return nil, err
 	}
-	ssTableFilePath := fmt.Sprintf("%s/%d.log", st.dataFilesDirectory, numFiles)
-	file, err := os.OpenFile(ssTableFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, err
-	}
-	return file, nil
+	st.mutex.Lock()
+	id := st.manifest.NextFileId
+	st.manifest.NextFileId++
+	st.mutex.Unlock()
+	ssTableFilePath := fmt.Sprintf("%s/%d.log", st.dataFilesDirectory, id)
+	return os.OpenFile(ssTableFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 }
 
 // Write writes a stream of key, value pairs to the required file as per the format
@@ -86,24 +92,42 @@ func (st *SsTable) NewFile() (*os.File, error) {
 // example: 1. MemTable OR 2. firstLevelFiles which need to be merged and compacted.
 // It also updates the internal structs for firstLevelFiles and indexBlocks
 func (st *SsTable) Write(file *os.File, iteratorFunc func(fn func(key, value string))) error {
-	indexOffset, indexBlock, err := st.writeDataBlocks(file, iteratorFunc)
+	indexBlock, err := st.writeToFile(file, iteratorFunc)
 	if err != nil {
 		return err
 	}
-	if !st.skipIndex {
-		if err = st.writeIndexBlock(file, indexBlock); err != nil {
-			return err
-		}
-		if err = st.writeFooter(file, indexOffset); err != nil {
-			return err
-		}
-	}
 
+	st.mutex.Lock()
 	st.firstLevelFiles = append(st.firstLevelFiles, file)
 	if !st.skipIndex {
 		st.indexBlocks = append(st.indexBlocks, indexBlock)
 	}
+	st.manifest.FileNames = append(st.manifest.FileNames, file.Name())
+
+	st.saveManifest()
+	st.mutex.Unlock()
 	return nil
+}
+
+// Similar to Write function, but it doesn't update internal structs
+// Write writes a stream of key, value pairs to the required file as per the format
+// of SSTable file which is [data-block(s)][index-block][footer].
+// It calls the iteratorFunc function to get a stream of key, value pairs from a source.
+// example: 1. MemTable OR 2. firstLevelFiles which need to be merged and compacted.
+func (st *SsTable) writeToFile(file *os.File, iteratorFunc func(fn func(key, value string))) ([]indexBlockEntry, error) {
+	indexOffset, indexBlock, err := st.writeDataBlocks(file, iteratorFunc)
+	if err != nil {
+		return nil, err
+	}
+	if !st.skipIndex {
+		if err = st.writeIndexBlock(file, indexBlock); err != nil {
+			return nil, err
+		}
+		if err = st.writeFooter(file, indexOffset); err != nil {
+			return nil, err
+		}
+	}
+	return indexBlock, err
 }
 
 func (st *SsTable) writeFooter(file *os.File, indexBlockStartOffset int) error {
@@ -189,31 +213,33 @@ func (st *SsTable) writeIndexBlock(file *os.File, indexBlock []indexBlockEntry) 
 	return nil
 }
 
-func (st *SsTable) getAllFirstLevelFilesFromDirectory() ([]*os.File, error) {
+// Gets the following metadata:
+// 1. Reads manifest JSON to get the nextFileId and expected order of files. Populate in
+// directoryMetadata.manifest.
+// 2. Opens all sstable log files and populates in directoryMetadata.firstLevelFiles
+func (st *SsTable) getDirectoryMetadata() (directoryMetadata *SsTable, err error) {
+	directoryMetadata = &SsTable{}
 	if err := os.MkdirAll(st.dataFilesDirectory, 0755); err != nil {
 		return nil, err
 	}
-	ssTableFiles := []*os.File{}
-	// todo: os.Entries might be a better approach if there are frequent deletes due to compaction
-	for i := 0; ; i++ {
-		filePath := fmt.Sprintf("%s/%d.log", st.dataFilesDirectory, i)
-		file, err := os.OpenFile(filePath, os.O_RDONLY, 0644)
-		// as per current design, if a file is not found for 0th file, it won't also be present
-		// 1st file.
-		if os.IsNotExist(err) {
-			return ssTableFiles, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		ssTableFiles = append(ssTableFiles, file)
+	manifest, err := st.getManifest()
+	if err != nil {
+		return nil, err
 	}
+	directoryMetadata.manifest = *manifest
+
+	ssTableFiles, err := st.getAllLogFiles()
+	if err != nil {
+		return nil, err
+	}
+	directoryMetadata.firstLevelFiles = ssTableFiles
+	return directoryMetadata, nil
 }
 
 func (st *SsTable) buildIndexes(files []*os.File) ([][]indexBlockEntry, error) {
 	ssTableIndexes := [][]indexBlockEntry{}
 	for _, file := range files {
-		ssTableIndex, err := buildIndexFromFile(file)
+		ssTableIndex, err := st.buildIndexFromFile(file)
 		if err != nil {
 			return nil, err
 		}
@@ -222,16 +248,28 @@ func (st *SsTable) buildIndexes(files []*os.File) ([][]indexBlockEntry, error) {
 	return ssTableIndexes, nil
 }
 
-func buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
-	// 1. read footer and get the index offset
+func (st *SsTable) getIndexOffset(file *os.File) (uint32, error) {
 	info, err := os.Stat(file.Name())
 	fileSize := info.Size()
 	footerOffset := fileSize - 4
 	indexOffsetBuf := make([]byte, 4)
 	if _, err = file.ReadAt(indexOffsetBuf, footerOffset); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint32(indexOffsetBuf), nil
+}
+
+func (st *SsTable) buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
+	// 1. get the index offset
+	info, err := os.Stat(file.Name())
+	if err != nil {
 		return nil, err
 	}
-	indexOffset := binary.BigEndian.Uint32(indexOffsetBuf)
+	fileSize := info.Size()
+	indexOffset, err := st.getIndexOffset(file)
+	if err != nil {
+		return nil, err
+	}
 
 	// 2. load index in-memory
 	// 2.1 read index byte array
@@ -270,6 +308,8 @@ func buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
 }
 
 func (st *SsTable) Get(key string) (string, error) {
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
 	if st.skipIndex {
 		return st.linearSearch(key)
 	}
@@ -354,9 +394,6 @@ func (st *SsTable) linearSearchFile(file *os.File, key string) (string, error) {
 	entries := strings.Split(string(buf), "\n")
 	for _, payload := range entries {
 		cmds := strings.Split(payload, " ")
-		if len(cmds) < 2 {
-			continue
-		}
 		if cmds[1] == key {
 			return cmds[2], nil
 		}
