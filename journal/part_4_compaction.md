@@ -105,6 +105,8 @@ type SsTable struct {
     * Update manifest.json when Write function OR when atomicSwap is called.
 
 **Todo: how do we write tests to ensure that our application is safe of these race conditions?**
+    - Need to add a test for scenario where writes are going on even during compaction.
+**Todo: Prepare a test plan for functional tests**
 
 ## Metrics [Todo: after V1 implementation]
 

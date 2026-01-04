@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/golang-db/db"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,9 @@ func TestGetAndPutInBulk(t *testing.T) {
 	db, err := db.NewDB(db.Config{})
 	assert.NoError(t, err)
 	buildTestData(db)
+
+	// let the old files delete
+	time.Sleep(4 * time.Second)
 
 	value, err := db.Get("key_101")
 	assert.NoError(t, err)
