@@ -15,6 +15,13 @@ func buildTestData(db *db.DB) {
 		value := fmt.Sprintf("value_%d", i)
 		db.Put(key, value)
 	}
+
+	time.Sleep(100 * time.Millisecond)
+	for i := 300; i <= 377; i++ {
+		key := fmt.Sprintf("key_%d", i)
+		value := fmt.Sprintf("value_%d", i)
+		db.Put(key, value)
+	}
 }
 
 // we take large enough keys so that the flow can be tested for flushing memtable to sstable
@@ -39,7 +46,7 @@ func TestGetAndPutInBulk(t *testing.T) {
 	value, err = db.Get("GET")
 	assert.Equal(t, "", value)
 
-	for i := 0; i <= 151; i++ {
+	for i := 250; i <= 377; i++ {
 		value, err = db.Get(fmt.Sprintf("key_%d", i))
 		assert.NoError(t, err)
 		assert.Equal(t, fmt.Sprintf("value_%d", i), value)
