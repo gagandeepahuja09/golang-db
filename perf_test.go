@@ -8,6 +8,38 @@ import (
 	"github.com/golang-db/sstable"
 )
 
+func buildTestDataWithPutOnRepeatedKeys(db *db.DB) {
+	for i := 0; i < 300; i++ {
+		key := fmt.Sprintf("key_%d", i)
+		value := fmt.Sprintf("value_%d", i)
+		db.Put(key, value)
+	}
+
+	for i := 0; i < 300; i += 2 {
+		key := fmt.Sprintf("key_%d", i)
+		value := fmt.Sprintf("value_%d", i)
+		db.Put(key, value)
+	}
+
+	for i := 0; i < 300; i += 5 {
+		key := fmt.Sprintf("key_%d", i)
+		value := fmt.Sprintf("value_%d", i)
+		db.Put(key, value)
+	}
+}
+
+func BenchmarkSSTableWithCompaction(b *testing.B) {
+	db, _ := db.NewDB(db.Config{
+		SsTableConfig: sstable.Config{
+			SkipIndex: false,
+		},
+	})
+	buildTestDataWithPutOnRepeatedKeys(db)
+	for b.Loop() {
+		testGetInBulk(db)
+	}
+}
+
 func BenchmarkSSTableBinarySearchMixedWorkload(b *testing.B) {
 	db, _ := db.NewDB(db.Config{
 		SsTableConfig: sstable.Config{
