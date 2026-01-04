@@ -127,7 +127,7 @@ func (st *SsTable) writeToFile(file *os.File, iteratorFunc func(fn func(key, val
 			return nil, err
 		}
 	}
-	return nil, err
+	return indexBlock, err
 }
 
 func (st *SsTable) writeFooter(file *os.File, indexBlockStartOffset int) error {
