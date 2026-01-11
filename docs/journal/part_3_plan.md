@@ -175,3 +175,5 @@ flowchart LR
 1. **SSTable Read Path** - This is the critical missing piece to make your KV store functional
 2. **DELETE command** - Essential for a complete KV store
 3. **Test coverage** - Validate WAL recovery and SSTable operations before adding complexity
+
+**Todo:** Connection pooling

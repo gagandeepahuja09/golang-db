@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/golang-db/memtable"
 	"github.com/golang-db/sstable"
@@ -12,6 +13,7 @@ import (
 )
 
 type DB struct {
+	mu       sync.RWMutex
 	wal      *wal.Wal
 	memTable *memtable.Memtable
 	ssTable  *sstable.SsTable
@@ -44,6 +46,8 @@ func (db *DB) Close() {
 }
 
 func (db *DB) Get(key string) (value string, err error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	value, ok := db.memTable.Get(key)
 	if !ok {
 		value, err = db.ssTable.Get(key)
@@ -61,6 +65,8 @@ func (db *DB) createSsTableAndClearWalAndMemTable() error {
 }
 
 func (db *DB) Put(key, value string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if err := db.writeToWal(key, value); err != nil {
 		return errors.New("Something went wrong")
 	}
