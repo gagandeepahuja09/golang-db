@@ -9,6 +9,8 @@ import (
 )
 
 func (st *SsTable) ShouldRunCompaction() bool {
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
 	return !st.compacting && len(st.firstLevelFiles) >= 4
 }
 
