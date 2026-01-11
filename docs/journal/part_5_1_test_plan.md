@@ -107,7 +107,7 @@ func (st *SsTable) linearSearchFile(file *os.File, key string) (string, error) {
 
 ---
 
-### **Bug 6: Race Condition in `Put`** (High)
+### **Bug 6: Race Condition in `Put`** (High: Done)
 
 ```63:75:db/db.go
 func (db *DB) Put(key, value string) error {

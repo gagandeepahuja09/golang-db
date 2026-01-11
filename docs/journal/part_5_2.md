@@ -63,11 +63,11 @@
 - We will also be using 
 - **Why this wins?**
 
-### Todo: Benchmarking
-# What to run:
+### Todo: Benchmarking 
+What to run:
 go test -bench=. -benchmem -cpu=1,4,8,16
 
-# Key metrics to compare:
+#### Key metrics to compare - Todo
 
 ┌────────────────────────────────────────────────────────────────┐
 │ Benchmark                          │ Option 2 │ Option 3      │
@@ -79,3 +79,14 @@ go test -bench=. -benchmem -cpu=1,4,8,16
 │ P99 latency under load             │ Spiky    │ Consistent ✓  │
 │ BenchmarkPut_Batched               │ N/A      │ 50x faster ✓  │
 └────────────────────────────────────────────────────────────────┘
+
+# Bugfix: Block Boundary - Using Index Block
+    ```
+    endOffset := ssTableIndex[lowerBoundSliceIndex].offset + st.blockLength
+		if lowerBoundSliceIndex < len(ssTableIndex)-1 {
+			// todo: it is safer to have endOffset as start of index offset.
+			// this can potentially lead to issue as more than
+			endOffset = ssTableIndex[lowerBoundSliceIndex+1].offset
+		}
+    ```
+- 

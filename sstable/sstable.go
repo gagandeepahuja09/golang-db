@@ -172,9 +172,6 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 			// write this data block to the file
 			// todo: change data block entry to [length][payload][checksum]xx
 			// instead of "PUT key value\n"
-			// if _, err := file.Write([]byte(ssTableBlock)); err != nil {
-			// 	return err
-			// }
 			if _, err = file.Write([]byte(ssTableBlock)); err != nil {
 				// todo: add some break statement
 				// break
@@ -228,7 +225,7 @@ func (st *SsTable) getDirectoryMetadata() (directoryMetadata *SsTable, err error
 	}
 	directoryMetadata.manifest = *manifest
 
-	ssTableFiles, err := st.getAllLogFiles()
+	ssTableFiles, err := st.getAllFiles(directoryMetadata.manifest.FileNames)
 	if err != nil {
 		return nil, err
 	}
