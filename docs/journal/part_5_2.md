@@ -89,4 +89,7 @@ go test -bench=. -benchmem -cpu=1,4,8,16
 			endOffset = ssTableIndex[lowerBoundSliceIndex+1].offset
 		}
     ```
-- 
+--------------------------------------------------------------------------------------------
+
+* **Integration tests tell you it works. Unit tests tell you why it works and if something stops working, you can reason on the basis of failing UTs.**
+* **Integration tests test compaction bugs while UTs test logical bugs.**

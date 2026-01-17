@@ -29,7 +29,7 @@ Excellent! I've analyzed your codebase thoroughly. This is a solid LSM-tree impl
 
 ## 🐛 Bugs Identified
 
-### **Bug 1: Double Path Prefix in `getAllLogFiles`** (Critical)
+### **Bug 1: Double Path Prefix in `getAllLogFiles`** (Critical: Done)
 
 ```51:58:sstable/manifest.go
 func (st *SsTable) getAllLogFiles() ([]*os.File, error) {
@@ -61,7 +61,7 @@ No length check before accessing `cmds[1]` and `cmds[2]`. Empty lines or malform
 
 ---
 
-### **Bug 3: Newline in WAL Value Parsing** (Medium)
+### **Bug 3: Newline in WAL Value Parsing** (Critical: Done)
 
 ```108:115:db/db.go
 		line := string(payload)
@@ -148,7 +148,7 @@ Errors are logged but execution continues, potentially corrupting data.
 
 ### **Priority 1: Unit Tests for Core Components (Must Have)**
 
-#### **1.1 WAL Tests** (`wal/wal_test.go`)
+#### **1.1 WAL Tests** (`wal/wal_test.go`) [75% Done]
 ```go
 // Test cases to write:
 func TestWal_WriteAndReadSingleEntry(t *testing.T)
@@ -299,3 +299,13 @@ func TestSsTable_MissingFile(t *testing.T)
 9. **Concurrency tests** - Production readiness
 
 Would you like me to write the actual test implementations for any of these, starting with the highest priority ones? If so, please switch to **Agent mode** and I can create the test files for you.
+
+------------------
+17 Jan
+
+gagandeep.ahuja@RZP1834 golang-db % go test -coverprofile=c.out ./...
+ok      github.com/golang-db    12.241s coverage: 0.0% of statements
+ok      github.com/golang-db/db 55.102s coverage: 70.9% of statements
+        github.com/golang-db/memtable           coverage: 0.0% of statements
+        github.com/golang-db/sstable            coverage: 0.0% of statements
+ok      github.com/golang-db/wal        0.987s  coverage: 77.6% of statements
