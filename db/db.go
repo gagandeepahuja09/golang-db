@@ -94,7 +94,7 @@ func (db *DB) flushMemtableToSsTable() error {
 }
 
 func (db *DB) writeToWal(key, value string) error {
-	payload := fmt.Sprintf("PUT %s %s\n", key, value)
+	payload := fmt.Sprintf("PUT %s %s", key, value)
 	return db.wal.WriteEntry(payload)
 }
 

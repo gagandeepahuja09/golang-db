@@ -46,11 +46,9 @@ func (st *SsTable) saveManifest() error {
 	return err
 }
 
-func (st *SsTable) getAllLogFiles() ([]*os.File, error) {
-	fileNames := st.manifest.FileNames
+func (st *SsTable) getAllFiles(filePaths []string) ([]*os.File, error) {
 	ssTableFiles := []*os.File{}
-	for _, fileName := range fileNames {
-		filePath := fmt.Sprintf("%s/%s", st.dataFilesDirectory, fileName)
+	for _, filePath := range filePaths {
 		file, err := os.OpenFile(filePath, os.O_RDONLY, 0644)
 		if err != nil {
 			return nil, err

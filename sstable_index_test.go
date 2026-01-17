@@ -2,12 +2,27 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/golang-db/db"
+	"github.com/golang-db/sstable"
 	"github.com/stretchr/testify/assert"
 )
+
+var testDbConfig = db.Config{
+	// todo: walConfig. will be better to have a single folder like: temp -> wal.log and sstable_datafiles
+	// directory
+	SsTableConfig: sstable.Config{
+		DataFilesDirectory: "temp",
+	},
+}
+
+func dbDirCleanUp(t *testing.T) {
+	err := os.RemoveAll("temp")
+	assert.NoError(t, err)
+}
 
 func buildTestData(db *db.DB) {
 	for i := 0; i < 300; i++ {
@@ -24,13 +39,28 @@ func buildTestData(db *db.DB) {
 	}
 }
 
+func assertValuesForTestData(t *testing.T, db *db.DB) {
+	for i := 250; i <= 377; i++ {
+		value, err := db.Get(fmt.Sprintf("key_%d", i))
+		assert.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("value_%d", i), value)
+	}
+
+	for i := 600; i <= 625; i++ {
+		value, _ := db.Get(fmt.Sprintf("key_%d", i))
+		assert.Equal(t, "", value)
+	}
+}
+
 // we take large enough keys so that the flow can be tested for flushing memtable to sstable
 func TestGetAndPutInBulk(t *testing.T) {
-	db, err := db.NewDB(db.Config{})
+	defer dbDirCleanUp(t)
+
+	db, err := db.NewDB(testDbConfig)
 	assert.NoError(t, err)
 	buildTestData(db)
 
-	// let the old unrequired files which should now be compacted to a single file get delete
+	// let the old unrequired files which should now be compacted to a single file get deleted
 	time.Sleep(4 * time.Second)
 
 	value, err := db.Get("key_101")
@@ -46,16 +76,5 @@ func TestGetAndPutInBulk(t *testing.T) {
 	value, err = db.Get("GET")
 	assert.Equal(t, "", value)
 
-	for i := 250; i <= 377; i++ {
-		value, err = db.Get(fmt.Sprintf("key_%d", i))
-		assert.NoError(t, err)
-		assert.Equal(t, fmt.Sprintf("value_%d", i), value)
-	}
-
-	for i := 600; i <= 625; i++ {
-		value, err = db.Get(fmt.Sprintf("key_%d", i))
-		assert.Equal(t, "", value)
-	}
-
-	// 3. delete the sstable file
+	assertValuesForTestData(t, db)
 }
