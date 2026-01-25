@@ -11,7 +11,7 @@ const (
 )
 
 type CreateTable struct {
-	tableName                string
+	TableName                string
 	ColumnDetails            []Column
 	PrimaryKeyColumnPosition int
 }

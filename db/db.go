@@ -14,6 +14,11 @@ import (
 	"github.com/golang-db/wal"
 )
 
+const (
+	CatalogKey     = "_calatog"
+	SchemaTemplate = "_schema%s"
+)
+
 type DB struct {
 	mu       sync.RWMutex
 	wal      *wal.Wal
@@ -43,6 +48,19 @@ func NewDB(config Config) (*DB, error) {
 
 	// todo:
 	// GET _catalog key during application init
+	// tablesString, err :=
+	db.Get(CatalogKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// tables := strings.Split(tablesString, ",")
+	// for _, table := range tables {
+	// 	schemaStr, err := db.Get(fmt.Sprintf(SchemaTemplate, table))
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
 	// GET all individual schemas for each of the tables
 	// store in db.tables
 	return &db, err
@@ -132,23 +150,74 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 
 func (db *DB) CreateTable(createTableInput sqlparser.CreateTable) error {
 	db.tables = append(db.tables, createTableInput)
-	serializedSchema := serializeSchema(createTableInput)
+
+	var tableNames string
+	for i, table := range db.tables {
+		tableNames += table.TableName
+		if i < len(db.tables)-1 {
+			tableNames += ","
+		}
+	}
 
 	// PERFORM PUT operation with _catalog key and all table names.
+	db.Put(CatalogKey, tableNames)
+
 	// PERFORM PUT operation with _schema:[table_name] key
+	db.Put(fmt.Sprintf(SchemaTemplate, createTableInput.TableName), string(
+		serialiseCreateTableInput(createTableInput)))
 
 	return nil
 }
 
-// serialization strategy: [PK_column_position][columnDataType1][columnNameLength1][columnName1][columnDataType2][columnNameLength2][columnName2]...
-func serializeSchema(createTableInput sqlparser.CreateTable) []byte {
-	serializedSchema := []byte{}
-	serializedSchema = binary.BigEndian.AppendUint32(serializedSchema, uint32(createTableInput.PrimaryKeyColumnPosition))
+// serialisation strategy: [PK_column_position][columnDataType1][columnNameLength1][columnName1][columnDataType2][columnNameLength2][columnName2]...
+func serialiseCreateTableInput(createTableInput sqlparser.CreateTable) []byte {
+	serialisedSchema := []byte{}
+	serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(createTableInput.PrimaryKeyColumnPosition))
 
 	for _, col := range createTableInput.ColumnDetails {
-		serializedSchema = append(serializedSchema, col.DataType)
-		serializedSchema = append(serializedSchema, []byte(col.ColumnName)...)
+		serialisedSchema = append(serialisedSchema, col.DataType)
+		serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(len(col.ColumnName)))
+		serialisedSchema = append(serialisedSchema, []byte(col.ColumnName)...)
 	}
 
-	return serializedSchema
+	return serialisedSchema
+}
+
+func deserialiseCreateTableInput(buf []byte) (*sqlparser.CreateTable, error) {
+	var createTableMeta sqlparser.CreateTable
+	i := 0
+	if len(buf) < 4 {
+		return nil, errors.New("unexpected error while reading primary key column position")
+	}
+	primaryKeyColumnPosition := binary.BigEndian.Uint32(buf[i : i+4])
+	createTableMeta.PrimaryKeyColumnPosition = int(primaryKeyColumnPosition)
+	i += 4
+
+	columnDetails := []sqlparser.Column{}
+	for i < len(buf) {
+		var columnMeta sqlparser.Column
+		dataType := buf[i]
+		if i+1 > len(buf) {
+			return nil, errors.New("unexpected error while reading column data type")
+		}
+		columnMeta.DataType = dataType
+		i++
+
+		if i+4 > len(buf) {
+			return nil, errors.New("unexpected error while reading column length")
+		}
+		columnNameLength := binary.BigEndian.Uint32(buf[i : i+4])
+		i += 4
+
+		if i+int(columnNameLength) > len(buf) {
+			return nil, errors.New("unexpected error while reading column name")
+		}
+		columnMeta.ColumnName = string(buf[i : i+int(columnNameLength)])
+		i += int(columnNameLength)
+
+		columnDetails = append(columnDetails, columnMeta)
+	}
+	createTableMeta.ColumnDetails = columnDetails
+
+	return &createTableMeta, nil
 }
