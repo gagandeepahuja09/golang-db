@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/golang-db/memtable"
+	sqlparser "github.com/golang-db/sql_parser"
 	"github.com/golang-db/sstable"
 	"github.com/golang-db/wal"
 )
@@ -17,6 +19,7 @@ type DB struct {
 	wal      *wal.Wal
 	memTable *memtable.Memtable
 	ssTable  *sstable.SsTable
+	tables   []sqlparser.CreateTable
 }
 
 type Config struct {
@@ -37,6 +40,11 @@ func NewDB(config Config) (*DB, error) {
 	}
 	db.memTable = memTable
 	db.ssTable, err = sstable.NewSsTable(config.SsTableConfig)
+
+	// todo:
+	// GET _catalog key during application init
+	// GET all individual schemas for each of the tables
+	// store in db.tables
 	return &db, err
 }
 
@@ -120,4 +128,27 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 		value := args[2]
 		memTable.Put(key, value)
 	}
+}
+
+func (db *DB) CreateTable(createTableInput sqlparser.CreateTable) error {
+	db.tables = append(db.tables, createTableInput)
+	serializedSchema := serializeSchema(createTableInput)
+
+	// PERFORM PUT operation with _catalog key and all table names.
+	// PERFORM PUT operation with _schema:[table_name] key
+
+	return nil
+}
+
+// serialization strategy: [PK_column_position][columnDataType1][columnNameLength1][columnName1][columnDataType2][columnNameLength2][columnName2]...
+func serializeSchema(createTableInput sqlparser.CreateTable) []byte {
+	serializedSchema := []byte{}
+	serializedSchema = binary.BigEndian.AppendUint32(serializedSchema, uint32(createTableInput.PrimaryKeyColumnPosition))
+
+	for _, col := range createTableInput.ColumnDetails {
+		serializedSchema = append(serializedSchema, col.DataType)
+		serializedSchema = append(serializedSchema, []byte(col.ColumnName)...)
+	}
+
+	return serializedSchema
 }

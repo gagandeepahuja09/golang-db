@@ -12,6 +12,10 @@ import (
 	"github.com/golang-db/db"
 )
 
+const (
+	CommandNotSupported = "Command Not Supported"
+)
+
 func main() {
 	db, err := db.NewDB(db.Config{})
 	defer db.Close()
@@ -42,10 +46,16 @@ func main() {
 			} else {
 				fmt.Println("PUT operation performed successfully")
 			}
+		case "CREATE":
+			if len(args) > 1 && args[1] == "TABLE" {
+				cmdCreateTable(db, args)
+			} else {
+				fmt.Println(CommandNotSupported)
+			}
 		case "EXIT":
 			breakLoop = true
 		default:
-			fmt.Println("Command not supported")
+			fmt.Println(CommandNotSupported)
 		}
 		if breakLoop {
 			break
@@ -78,4 +88,9 @@ func cmdPut(db *db.DB, args []string) error {
 		return fmt.Errorf("Something went wrong: %s", err.Error())
 	}
 	return nil
+}
+
+func cmdCreateTable(db *db.DB, args []string) error {
+	return nil
+	// return sqlparser.ParseCreateTable(args[2:])
 }
