@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -8,8 +9,14 @@ import (
 	"sync"
 
 	"github.com/golang-db/memtable"
+	sqlparser "github.com/golang-db/sql_parser"
 	"github.com/golang-db/sstable"
 	"github.com/golang-db/wal"
+)
+
+const (
+	CatalogKey     = "_calatog"
+	SchemaTemplate = "_schema:%s"
 )
 
 type DB struct {
@@ -17,6 +24,7 @@ type DB struct {
 	wal      *wal.Wal
 	memTable *memtable.Memtable
 	ssTable  *sstable.SsTable
+	tables   []sqlparser.CreateTable
 }
 
 type Config struct {
@@ -37,7 +45,39 @@ func NewDB(config Config) (*DB, error) {
 	}
 	db.memTable = memTable
 	db.ssTable, err = sstable.NewSsTable(config.SsTableConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	db.tables, err = db.getAllTables()
+	if err != nil {
+		return nil, err
+	}
+
 	return &db, err
+}
+
+func (db *DB) getAllTables() ([]sqlparser.CreateTable, error) {
+	tables := []sqlparser.CreateTable{}
+	tablesString, err := db.Get(CatalogKey)
+	if err != nil || tablesString == "" {
+		return nil, err
+	}
+
+	tableNames := strings.Split(tablesString, ",")
+	for _, tableName := range tableNames {
+		schemaStr, err := db.Get(fmt.Sprintf(SchemaTemplate, tableName))
+		if err != nil {
+			return nil, err
+		}
+		createTableInput, err := deserialiseCreateTableInput([]byte(schemaStr))
+		if err != nil {
+			return nil, err
+		}
+		createTableInput.TableName = tableName
+		tables = append(tables, *createTableInput)
+	}
+	return tables, nil
 }
 
 func (db *DB) Close() {
@@ -120,4 +160,95 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 		value := args[2]
 		memTable.Put(key, value)
 	}
+}
+
+func (db *DB) CreateTable(createTableInput sqlparser.CreateTable) error {
+	db.tables = append(db.tables, createTableInput)
+
+	var tableNames string
+	for i, table := range db.tables {
+		tableNames += table.TableName
+		if i < len(db.tables)-1 {
+			tableNames += ","
+		}
+	}
+
+	// PERFORM PUT operation with _catalog key and all table names.
+	db.Put(CatalogKey, tableNames)
+
+	// PERFORM PUT operation with _schema:[table_name] key
+	db.Put(fmt.Sprintf(SchemaTemplate, createTableInput.TableName), string(
+		serialiseCreateTableInput(createTableInput)))
+
+	return nil
+}
+
+func (db *DB) ShowTables() []string {
+	tableNames := []string{}
+	for _, table := range db.tables {
+		tableNames = append(tableNames, table.TableName)
+	}
+	return tableNames
+}
+
+func (db *DB) ShowCreateTable(tableName string) (*sqlparser.CreateTable, error) {
+	for _, table := range db.tables {
+		if table.TableName == tableName {
+			return &table, nil
+		}
+	}
+	return nil, fmt.Errorf("table: '%s' not found", tableName)
+}
+
+// serialisation strategy: [PK_column_position][columnDataType1][columnNameLength1][columnName1][columnDataType2][columnNameLength2][columnName2]...
+func serialiseCreateTableInput(createTableInput sqlparser.CreateTable) []byte {
+	serialisedSchema := []byte{}
+	serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(createTableInput.PrimaryKeyColumnPosition))
+
+	for _, col := range createTableInput.ColumnDetails {
+		serialisedSchema = append(serialisedSchema, col.DataType)
+		serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(len(col.ColumnName)))
+		serialisedSchema = append(serialisedSchema, []byte(col.ColumnName)...)
+	}
+
+	return serialisedSchema
+}
+
+func deserialiseCreateTableInput(buf []byte) (*sqlparser.CreateTable, error) {
+	var createTableMeta sqlparser.CreateTable
+	i := 0
+	if len(buf) < 4 {
+		return nil, errors.New("unexpected error while reading primary key column position")
+	}
+	primaryKeyColumnPosition := binary.BigEndian.Uint32(buf[i : i+4])
+	createTableMeta.PrimaryKeyColumnPosition = int(primaryKeyColumnPosition)
+	i += 4
+
+	columnDetails := []sqlparser.Column{}
+	for i < len(buf) {
+		var columnMeta sqlparser.Column
+		dataType := buf[i]
+		if i+1 > len(buf) {
+			return nil, errors.New("unexpected error while reading column data type")
+		}
+		columnMeta.DataType = dataType
+		i++
+
+		if i+4 > len(buf) {
+			return nil, errors.New("unexpected error while reading column length")
+		}
+		columnNameLength := binary.BigEndian.Uint32(buf[i : i+4])
+		i += 4
+
+		if i+int(columnNameLength) > len(buf) {
+			return nil, errors.New("unexpected error while reading column name")
+		}
+		columnMeta.ColumnName = string(buf[i : i+int(columnNameLength)])
+		i += int(columnNameLength)
+
+		columnDetails = append(columnDetails, columnMeta)
+	}
+	createTableMeta.ColumnDetails = columnDetails
+
+	return &createTableMeta, nil
 }
