@@ -16,7 +16,7 @@ import (
 
 const (
 	CatalogKey     = "_calatog"
-	SchemaTemplate = "_schema%s"
+	SchemaTemplate = "_schema:%s"
 )
 
 type DB struct {
@@ -45,25 +45,39 @@ func NewDB(config Config) (*DB, error) {
 	}
 	db.memTable = memTable
 	db.ssTable, err = sstable.NewSsTable(config.SsTableConfig)
-
-	// todo:
-	// GET _catalog key during application init
-	// tablesString, err :=
-	db.Get(CatalogKey)
 	if err != nil {
 		return nil, err
 	}
 
-	// tables := strings.Split(tablesString, ",")
-	// for _, table := range tables {
-	// 	schemaStr, err := db.Get(fmt.Sprintf(SchemaTemplate, table))
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// }
-	// GET all individual schemas for each of the tables
-	// store in db.tables
+	db.tables, err = db.getAllTables()
+	if err != nil {
+		return nil, err
+	}
+
 	return &db, err
+}
+
+func (db *DB) getAllTables() ([]sqlparser.CreateTable, error) {
+	tables := []sqlparser.CreateTable{}
+	tablesString, err := db.Get(CatalogKey)
+	if err != nil || tablesString == "" {
+		return nil, err
+	}
+
+	tableNames := strings.Split(tablesString, ",")
+	for _, tableName := range tableNames {
+		schemaStr, err := db.Get(fmt.Sprintf(SchemaTemplate, tableName))
+		if err != nil {
+			return nil, err
+		}
+		createTableInput, err := deserialiseCreateTableInput([]byte(schemaStr))
+		if err != nil {
+			return nil, err
+		}
+		createTableInput.TableName = tableName
+		tables = append(tables, *createTableInput)
+	}
+	return tables, nil
 }
 
 func (db *DB) Close() {
@@ -167,6 +181,23 @@ func (db *DB) CreateTable(createTableInput sqlparser.CreateTable) error {
 		serialiseCreateTableInput(createTableInput)))
 
 	return nil
+}
+
+func (db *DB) ShowTables() []string {
+	tableNames := []string{}
+	for _, table := range db.tables {
+		tableNames = append(tableNames, table.TableName)
+	}
+	return tableNames
+}
+
+func (db *DB) ShowCreateTable(tableName string) (*sqlparser.CreateTable, error) {
+	for _, table := range db.tables {
+		if table.TableName == tableName {
+			return &table, nil
+		}
+	}
+	return nil, fmt.Errorf("table: '%s' not found", tableName)
 }
 
 // serialisation strategy: [PK_column_position][columnDataType1][columnNameLength1][columnName1][columnDataType2][columnNameLength2][columnName2]...
