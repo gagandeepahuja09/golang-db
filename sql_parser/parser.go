@@ -1,73 +1,102 @@
 package sqlparser
 
 import (
-	"errors"
 	"fmt"
 )
 
 // not handling \n for now.
 const (
+	KeywordCreate                = "CREATE"
+	KeywordTable                 = "TABLE"
+	SymbolOpenRoundBracket       = "("
+	SymbolClosedRoundBracket     = ")"
 	ExpectedSyntaxCmdCreateTable = "expected more arguments in CREATE TABLE command. Expected syntax: CREATE TABLE name_of_table ( c1 int, c2 bool, c3 string )"
 )
 
-type CreateTable struct {
-	TableName                string
-	ColumnDetails            []Column
-	PrimaryKeyColumnPosition int
+type Parser struct {
+	tokeniser    *Tokeniser
+	currentToken Token
 }
 
-type Column struct {
-	ColumnName string
-	DataType   uint8
+func NewParser(input string) *Parser {
+	t := NewTokeniser(input)
+	currentToken := t.NextToken()
+	return &Parser{
+		tokeniser:    t,
+		currentToken: currentToken,
+	}
 }
 
-// parses create table query to extract all of the required metadata.
-//
-//	input: first 2 words are removed: CREATE TABLE and the rest of the query.
-func ParseCreateTable(args []string) (*CreateTable, error) {
-	if len(args) < 2 {
-		return nil, errors.New(ExpectedSyntaxCmdCreateTable)
+func (p *Parser) consume(tt TokenType, expectedVal string) error {
+	if p.currentToken.Type != tt || (expectedVal != "" && p.currentToken.Value != expectedVal) {
+		return fmt.Errorf(
+			"syntax error: expected %s %q, got %s %q",
+			tt, expectedVal, p.currentToken.Type, p.currentToken.Value)
 	}
-	tableName := args[0]
-	schemaSlice := args[1:]
+	p.currentToken = p.tokeniser.NextToken()
+	return nil
+}
 
-	fmt.Printf("tableName: %v\n", tableName)
-	fmt.Printf("schemaSlice: %v\n", schemaSlice)
+func getDataTypeFromString(columnType string) (DataType, error) {
+	switch columnType {
+	case "INT":
+		return Int, nil
+	case "STRING":
+		return String, nil
+	case "BOOL":
+		return Bool, nil
+	}
+	return DataType(25), fmt.Errorf("data type '%s' not found. expected one of INT, STRING, BOOL",
+		columnType)
+}
 
-	if len(schemaSlice) < 4 ||
-		(schemaSlice[0] != "(" && schemaSlice[len(schemaSlice)-1] != ")") {
-		return nil, errors.New(ExpectedSyntaxCmdCreateTable)
+// todo: add support for storing primary key index also.
+func (p *Parser) ParseCreateTable() (*CreateTable, error) {
+	if err := p.consume(KEYWORD, KeywordCreate); err != nil {
+		return nil, err
+	}
+	if err := p.consume(KEYWORD, KeywordTable); err != nil {
+		return nil, err
+	}
+	tableName := p.currentToken.Value
+	if err := p.consume(IDENTIFIER, ""); err != nil {
+		return nil, err
 	}
 
-	columnMeta := Column{}
-	// example: CREATE TABLE payment ( id int )
-	for i, schemaAttr := range schemaSlice {
-		if i == 0 || i == len(schemaSlice)-1 {
-			continue
+	if err := p.consume(SYMBOL, SymbolOpenRoundBracket); err != nil {
+		return nil, err
+	}
+
+	columnDetails := []Column{}
+	for p.currentToken.Value != SymbolClosedRoundBracket {
+		if p.currentToken.Value == "," {
+			p.consume(SYMBOL, ",")
 		}
-		if i%2 == 1 {
-			columnMeta.ColumnName = schemaAttr
-		} else {
-			// columnMeta.DataType = schemaAttr
+
+		columnName := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
 		}
+		columnType := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
+		}
+		dataType, err := getDataTypeFromString(columnType)
+		if err != nil {
+			return nil, err
+		}
+		columnDetails = append(columnDetails, Column{
+			ColumnName: columnName,
+			DataType:   dataType,
+		})
 	}
-	return nil, nil
 
-	// if len(schemaSlice) == 4 {
-	// 	schemaArg := schemaSlice[0]
-	// 	if schemaArg[len(schemaArg)-1] != ')' {
-	// 		return nil, errors.New(ExpectedSyntaxCmdCreateTable)
-	// 	}
-	// 	return &CreateTableInput{
-	// 		tableName: tableName,
-	// 		ColumnDetails: []Column{
-	// 			{
-	// 				columnName: schemaSlice[1],
-	// 				dataType:   schemaSlice[2],
-	// 			},
-	// 		},
-	// 	}, nil
-	// }
+	if len(columnDetails) == 0 {
+		return nil, fmt.Errorf("expected atleast one column detail, found none")
+	}
 
-	// return nil
+	return &CreateTable{
+		TableName:     tableName,
+		ColumnDetails: columnDetails,
+	}, nil
 }

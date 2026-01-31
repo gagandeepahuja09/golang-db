@@ -48,7 +48,7 @@ func main() {
 			}
 		case "CREATE":
 			if len(args) > 1 && args[1] == "TABLE" {
-				cmdCreateTable(db, args)
+				cmdCreateTable(db, line)
 			} else {
 				fmt.Println(CommandNotSupported)
 			}
@@ -90,7 +90,6 @@ func cmdPut(db *db.DB, args []string) error {
 	return nil
 }
 
-func cmdCreateTable(db *db.DB, args []string) error {
-	return nil
-	// return sqlparser.ParseCreateTable(args[2:])
+func cmdCreateTable(db *db.DB, query string) error {
+	return db.CreateTable(query)
 }
