@@ -1,73 +1,148 @@
 package sqlparser
 
 import (
-	"errors"
 	"fmt"
 )
 
-// not handling \n for now.
 const (
-	ExpectedSyntaxCmdCreateTable = "expected more arguments in CREATE TABLE command. Expected syntax: CREATE TABLE name_of_table ( c1 int, c2 bool, c3 string )"
+	KeywordCreate            = "CREATE"
+	KeywordTable             = "TABLE"
+	KeywordPrimary           = "PRIMARY"
+	KeywordKey               = "KEY"
+	SymbolOpenRoundBracket   = "("
+	SymbolClosedRoundBracket = ")"
 )
 
-type CreateTable struct {
-	TableName                string
-	ColumnDetails            []Column
-	PrimaryKeyColumnPosition int
+type Parser struct {
+	tokeniser    *Tokeniser
+	currentToken Token
 }
 
-type Column struct {
-	ColumnName string
-	DataType   uint8
+func NewParser(input string) *Parser {
+	t := NewTokeniser(input)
+	currentToken := t.NextToken()
+	return &Parser{
+		tokeniser:    t,
+		currentToken: currentToken,
+	}
 }
 
-// parses create table query to extract all of the required metadata.
-//
-//	input: first 2 words are removed: CREATE TABLE and the rest of the query.
-func ParseCreateTable(args []string) (*CreateTable, error) {
-	if len(args) < 2 {
-		return nil, errors.New(ExpectedSyntaxCmdCreateTable)
+func (p *Parser) consume(tt TokenType, expectedVal string) error {
+	if p.currentToken.Type != tt || (expectedVal != "" && p.currentToken.Value != expectedVal) {
+		return fmt.Errorf(
+			"syntax error: expected %s %q, got %s %q",
+			tt, expectedVal, p.currentToken.Type, p.currentToken.Value)
 	}
-	tableName := args[0]
-	schemaSlice := args[1:]
+	p.currentToken = p.tokeniser.NextToken()
+	return nil
+}
 
-	fmt.Printf("tableName: %v\n", tableName)
-	fmt.Printf("schemaSlice: %v\n", schemaSlice)
+func getDataTypeFromString(columnType string) (DataType, error) {
+	switch columnType {
+	case "INT":
+		return Int, nil
+	case "STRING":
+		return String, nil
+	case "BOOL":
+		return Bool, nil
+	}
+	return DataType(25), fmt.Errorf("data type '%s' not found. expected one of INT, STRING, BOOL",
+		columnType)
+}
 
-	if len(schemaSlice) < 4 ||
-		(schemaSlice[0] != "(" && schemaSlice[len(schemaSlice)-1] != ")") {
-		return nil, errors.New(ExpectedSyntaxCmdCreateTable)
+func (p *Parser) parsePrimaryKeyColumn() (string, error) {
+	if err := p.consume(KEYWORD, KeywordPrimary); err != nil {
+		return "", err
+	}
+	if err := p.consume(KEYWORD, KeywordKey); err != nil {
+		return "", err
+	}
+	if err := p.consume(SYMBOL, SymbolOpenRoundBracket); err != nil {
+		return "", err
+	}
+	// only primary key with one column supported as of now
+	pkColumn := p.currentToken.Value
+	if err := p.consume(IDENTIFIER, ""); err != nil {
+		return "", err
+	}
+	err := p.consume(SYMBOL, SymbolClosedRoundBracket)
+	return pkColumn, err
+}
+
+func (p *Parser) ParseCreateTable() (*CreateTable, error) {
+	if err := p.consume(KEYWORD, KeywordCreate); err != nil {
+		return nil, err
+	}
+	if err := p.consume(KEYWORD, KeywordTable); err != nil {
+		return nil, err
+	}
+	tableName := p.currentToken.Value
+	if err := p.consume(IDENTIFIER, ""); err != nil {
+		return nil, err
 	}
 
-	columnMeta := Column{}
-	// example: CREATE TABLE payment ( id int )
-	for i, schemaAttr := range schemaSlice {
-		if i == 0 || i == len(schemaSlice)-1 {
+	if err := p.consume(SYMBOL, SymbolOpenRoundBracket); err != nil {
+		return nil, err
+	}
+
+	columnDetails := []Column{}
+	pkColumn := ""
+	for p.currentToken.Value != SymbolClosedRoundBracket {
+		if p.currentToken.Value == "," {
+			p.consume(SYMBOL, ",")
+		}
+
+		// todo: add an error for maximum columns limit
+		if p.currentToken.Value == KeywordPrimary {
+			var err error
+			pkColumn, err = p.parsePrimaryKeyColumn()
+			if err != nil {
+				return nil, err
+			}
 			continue
 		}
-		if i%2 == 1 {
-			columnMeta.ColumnName = schemaAttr
-		} else {
-			// columnMeta.DataType = schemaAttr
+
+		columnName := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
+		}
+		columnType := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
+		}
+		dataType, err := getDataTypeFromString(columnType)
+		if err != nil {
+			return nil, err
+		}
+		columnDetails = append(columnDetails, Column{
+			ColumnName: columnName,
+			DataType:   dataType,
+		})
+	}
+
+	if len(columnDetails) == 0 {
+		return nil, fmt.Errorf("expected atleast one column detail, found none")
+	}
+
+	pkColumnPosition := 0
+	if pkColumn != "" {
+		for i, col := range columnDetails {
+			if col.ColumnName == pkColumn {
+				pkColumnPosition = i
+			}
+		}
+		if pkColumnPosition == 0 {
+			return nil, fmt.Errorf("primary key column '%s' not found", pkColumn)
 		}
 	}
-	return nil, nil
 
-	// if len(schemaSlice) == 4 {
-	// 	schemaArg := schemaSlice[0]
-	// 	if schemaArg[len(schemaArg)-1] != ')' {
-	// 		return nil, errors.New(ExpectedSyntaxCmdCreateTable)
-	// 	}
-	// 	return &CreateTableInput{
-	// 		tableName: tableName,
-	// 		ColumnDetails: []Column{
-	// 			{
-	// 				columnName: schemaSlice[1],
-	// 				dataType:   schemaSlice[2],
-	// 			},
-	// 		},
-	// 	}, nil
-	// }
+	if err := p.consume(SYMBOL, SymbolClosedRoundBracket); err != nil {
+		return nil, err
+	}
 
-	// return nil
+	return &CreateTable{
+		TableName:                tableName,
+		ColumnDetails:            columnDetails,
+		PrimaryKeyColumnPosition: pkColumnPosition,
+	}, nil
 }

@@ -162,7 +162,16 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 	}
 }
 
-func (db *DB) CreateTable(createTableInput sqlparser.CreateTable) error {
+func (db *DB) CreateTable(query string) error {
+	parser := sqlparser.NewParser(query)
+	input, err := parser.ParseCreateTable()
+	if err != nil {
+		return err
+	}
+	return db.createTable(*input)
+}
+
+func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
 	db.tables = append(db.tables, createTableInput)
 
 	var tableNames string
@@ -206,7 +215,7 @@ func serialiseCreateTableInput(createTableInput sqlparser.CreateTable) []byte {
 	serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(createTableInput.PrimaryKeyColumnPosition))
 
 	for _, col := range createTableInput.ColumnDetails {
-		serialisedSchema = append(serialisedSchema, col.DataType)
+		serialisedSchema = append(serialisedSchema, byte(col.DataType))
 		serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(len(col.ColumnName)))
 		serialisedSchema = append(serialisedSchema, []byte(col.ColumnName)...)
 	}
@@ -231,7 +240,7 @@ func deserialiseCreateTableInput(buf []byte) (*sqlparser.CreateTable, error) {
 		if i+1 > len(buf) {
 			return nil, errors.New("unexpected error while reading column data type")
 		}
-		columnMeta.DataType = dataType
+		columnMeta.DataType = sqlparser.DataType(dataType)
 		i++
 
 		if i+4 > len(buf) {
