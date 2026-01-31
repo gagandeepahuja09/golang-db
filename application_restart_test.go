@@ -13,15 +13,15 @@ var testPaymentsTable = sqlparser.CreateTable{
 	ColumnDetails: []sqlparser.Column{
 		{
 			ColumnName: "id",
-			DataType:   0,
+			DataType:   sqlparser.Int,
 		},
 		{
 			ColumnName: "status",
-			DataType:   1,
+			DataType:   sqlparser.String,
 		},
 		{
 			ColumnName: "international",
-			DataType:   2,
+			DataType:   sqlparser.Bool,
 		},
 	},
 }
@@ -47,8 +47,8 @@ func TestAppRestart(t *testing.T) {
 	dbForPut, err := db.NewDB(testDbConfig)
 	assert.NoError(t, err)
 
-	dbForPut.CreateTable(testPaymentsTable)
-	dbForPut.CreateTable(testRefundsTable)
+	dbForPut.CreateTable("CREATE TABLE payments (id INT, status STRING, international BOOL)")
+	dbForPut.CreateTable("CREATE TABLE refunds (status STRING, id INT, PRIMARY KEY (id))")
 	buildTestData(dbForPut)
 
 	// new instance created to test for app restart

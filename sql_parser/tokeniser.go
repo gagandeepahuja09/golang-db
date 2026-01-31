@@ -19,8 +19,10 @@ const (
 )
 
 var keywords = map[string]bool{
-	"CREATE": true,
-	"TABLE":  true,
+	KeywordCreate:  true,
+	KeywordTable:   true,
+	KeywordPrimary: true,
+	KeywordKey:     true,
 }
 
 type Token struct {
