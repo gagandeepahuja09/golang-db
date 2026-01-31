@@ -4,15 +4,13 @@ import (
 	"fmt"
 )
 
-// not handling \n for now.
 const (
-	KeywordCreate                = "CREATE"
-	KeywordTable                 = "TABLE"
-	KeywordPrimary               = "PRIMARY"
-	KeywordKey                   = "KEY"
-	SymbolOpenRoundBracket       = "("
-	SymbolClosedRoundBracket     = ")"
-	ExpectedSyntaxCmdCreateTable = "expected more arguments in CREATE TABLE command. Expected syntax: CREATE TABLE name_of_table ( c1 int, c2 bool, c3 string )"
+	KeywordCreate            = "CREATE"
+	KeywordTable             = "TABLE"
+	KeywordPrimary           = "PRIMARY"
+	KeywordKey               = "KEY"
+	SymbolOpenRoundBracket   = "("
+	SymbolClosedRoundBracket = ")"
 )
 
 type Parser struct {
@@ -52,7 +50,6 @@ func getDataTypeFromString(columnType string) (DataType, error) {
 		columnType)
 }
 
-// todo: add support for storing primary key index also.
 func (p *Parser) ParseCreateTable() (*CreateTable, error) {
 	if err := p.consume(KEYWORD, KeywordCreate); err != nil {
 		return nil, err
