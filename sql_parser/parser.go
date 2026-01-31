@@ -50,6 +50,25 @@ func getDataTypeFromString(columnType string) (DataType, error) {
 		columnType)
 }
 
+func (p *Parser) parsePrimaryKeyColumn() (string, error) {
+	if err := p.consume(KEYWORD, KeywordPrimary); err != nil {
+		return "", err
+	}
+	if err := p.consume(KEYWORD, KeywordKey); err != nil {
+		return "", err
+	}
+	if err := p.consume(SYMBOL, SymbolOpenRoundBracket); err != nil {
+		return "", err
+	}
+	// only primary key with one column supported as of now
+	pkColumn := p.currentToken.Value
+	if err := p.consume(IDENTIFIER, ""); err != nil {
+		return "", err
+	}
+	err := p.consume(SYMBOL, SymbolClosedRoundBracket)
+	return pkColumn, err
+}
+
 func (p *Parser) ParseCreateTable() (*CreateTable, error) {
 	if err := p.consume(KEYWORD, KeywordCreate); err != nil {
 		return nil, err
@@ -74,23 +93,10 @@ func (p *Parser) ParseCreateTable() (*CreateTable, error) {
 		}
 
 		// todo: add an error for maximum columns limit
-
 		if p.currentToken.Value == KeywordPrimary {
-			if err := p.consume(KEYWORD, KeywordPrimary); err != nil {
-				return nil, err
-			}
-			if err := p.consume(KEYWORD, KeywordKey); err != nil {
-				return nil, err
-			}
-			if err := p.consume(SYMBOL, SymbolOpenRoundBracket); err != nil {
-				return nil, err
-			}
-			// only primary key with one column supported as of now
-			pkColumn = p.currentToken.Value
-			if err := p.consume(IDENTIFIER, ""); err != nil {
-				return nil, err
-			}
-			if err := p.consume(SYMBOL, SymbolClosedRoundBracket); err != nil {
+			var err error
+			pkColumn, err = p.parsePrimaryKeyColumn()
+			if err != nil {
 				return nil, err
 			}
 			continue
