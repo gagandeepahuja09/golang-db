@@ -19,12 +19,23 @@ const (
 	SchemaTemplate = "_schema:%s"
 )
 
+type LocksAcquired struct {
+	writerTxnId  uint64
+	readerTxnIds []uint64
+}
+type transactionManager struct {
+	nextTransactionId     uint64
+	mu                    sync.Mutex
+	keyVsLocksAcquiredMap map[string]*LocksAcquired
+}
+
 type DB struct {
-	mu       sync.RWMutex
-	wal      *wal.Wal
-	memTable *memtable.Memtable
-	ssTable  *sstable.SsTable
-	tables   []sqlparser.CreateTable
+	mu                 sync.RWMutex
+	wal                *wal.Wal
+	memTable           *memtable.Memtable
+	ssTable            *sstable.SsTable
+	tables             []sqlparser.CreateTable
+	transactionManager transactionManager
 }
 
 type Config struct {
@@ -52,6 +63,12 @@ func NewDB(config Config) (*DB, error) {
 	db.tables, err = db.getAllTables()
 	if err != nil {
 		return nil, err
+	}
+
+	db.transactionManager = transactionManager{
+		nextTransactionId:     1,
+		mu:                    sync.Mutex{},
+		keyVsLocksAcquiredMap: map[string]*LocksAcquired{},
 	}
 
 	return &db, err
@@ -169,6 +186,18 @@ func (db *DB) CreateTable(query string) error {
 		return err
 	}
 	return db.createTable(*input)
+}
+
+func (db *DB) Begin() (*Transaction, error) {
+	db.transactionManager.mu.Lock()
+	defer db.transactionManager.mu.Unlock()
+
+	txn := Transaction{
+		id: db.transactionManager.nextTransactionId,
+		db: db,
+	}
+	db.transactionManager.nextTransactionId++
+	return &txn, nil
 }
 
 func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
