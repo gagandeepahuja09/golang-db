@@ -62,7 +62,7 @@ func (txn *Transaction) tryAcquireReadLock(key string) error {
 		writerTxnId := locksAcquired.writerTxnId
 		if writerTxnId != 0 {
 			if writerTxnId != txn.id {
-				return fmt.Errorf("cannot acquire reader lock as write lock acquired by transaction '%d'", writerTxnId)
+				return fmt.Errorf("cannot acquire read lock as write lock acquired by transaction '%d'", writerTxnId)
 			} else {
 				writeLockAlreadyAcquired = true
 			}
