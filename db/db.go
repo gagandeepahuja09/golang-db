@@ -152,7 +152,7 @@ func (db *DB) flushMemtableToSsTable() error {
 
 func (db *DB) writeToWal(key, value string) error {
 	payload := fmt.Sprintf("PUT %s %s", key, value)
-	return db.wal.WriteEntry(payload)
+	return db.wal.WriteEntry([]byte(payload))
 }
 
 func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
@@ -171,7 +171,7 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 		line := string(payload)
 		args := strings.Split(line, " ")
 		if len(args) != 3 {
-			return nil, errors.New("Expected exactly 2 arguments for PUT command\n")
+			return nil, errors.New("Expected exactly 2 arguments for PUT command")
 		}
 		key := args[1]
 		value := args[2]

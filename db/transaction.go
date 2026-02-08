@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"errors"
@@ -113,6 +114,85 @@ func (txn *Transaction) Get(key string) (string, error) {
 	return txn.db.Get(key)
 }
 
-func (txn *Transaction) Commit() {
+func (txn *Transaction) releaseAllLocks() {
+	for _, key := range txn.lockAcquiredKeys {
+		locksAcquired := txn.db.transactionManager.keyVsLocksAcquiredMap[key]
+		if locksAcquired.writerTxnId == txn.id {
+			locksAcquired.writerTxnId = 0
+		} else {
+			currentTxnIdFound := false
+			updatedReaderTxnIds := []uint64{}
+			for _, readerTxnId := range locksAcquired.readerTxnIds {
+				if readerTxnId == txn.id {
+					currentTxnIdFound = true
+					continue
+				}
+				updatedReaderTxnIds = append(updatedReaderTxnIds, readerTxnId)
+			}
+			if !currentTxnIdFound {
+				fmt.Println("INCONSISTENCY_OBSERVED_lockAcquiredKeys_AND_keyVsLocksAcquiredMap", map[string]interface{}{
+					"lockAcquiredKeys":      txn.lockAcquiredKeys,
+					"keyVsLocksAcquiredMap": txn.db.transactionManager.keyVsLocksAcquiredMap[key],
+					"key":                   key,
+				})
+			}
+			locksAcquired.readerTxnIds = updatedReaderTxnIds
+		}
+	}
+	txn.lockAcquiredKeys = []string{}
+}
 
+func (txn *Transaction) cleanupBufferedWriteMap() {
+	txn.bufferedWriteMap = map[string]string{}
+}
+
+func (txn *Transaction) Rollback() {
+	txn.releaseAllLocks()
+	txn.cleanupBufferedWriteMap()
+}
+
+// structure: [length][payload][offset]
+// payload structure:
+// ----
+// [length_of_command][command][number_of_transactions]
+// [payload_length_for_1st][payload_for_1st][payload_length_for_2nd][payload_for_2nd]...
+// till N = number_of_transactions
+// ----
+// command is "TRANSACTION" in this case
+// todo: we need to change the structure of payload for PUT command also similar to this.
+// writeToWal
+// txn.db.wal.WriteEntry()
+func serialiseTransactionCommitPayload(writeMap map[string]string) []byte {
+	payloads := []string{}
+	for key, value := range writeMap {
+		payload := fmt.Sprintf("PUT %s %s", key, value)
+		payloads = append(payloads, payload)
+	}
+
+	buf := []byte{}
+	transactionStr := "TRANSACTION"
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(transactionStr)))
+	buf = append(buf, []byte(transactionStr)...)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(payloads)))
+
+	for _, payload := range payloads {
+		buf = binary.BigEndian.AppendUint32(buf, uint32(len(payload)))
+		buf = append(buf, []byte(payload)...)
+	}
+	return buf
+}
+
+// necessary to do in a single WAL write for atomicity
+func (txn *Transaction) writeSingleWalEntryForCommit() {
+	buf := serialiseTransactionCommitPayload(txn.bufferedWriteMap)
+	txn.db.wal.WriteEntry(buf)
+}
+
+func (txn *Transaction) Commit() {
+	txn.writeSingleWalEntryForCommit()
+
+	// put in memtable done separately instead of db.Put as that would lead to separate writes in WAL
+	for key, value := range txn.bufferedWriteMap {
+		txn.db.memTable.Put(key, value)
+	}
 }

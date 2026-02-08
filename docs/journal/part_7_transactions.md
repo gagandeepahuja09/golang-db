@@ -30,7 +30,7 @@
 3. Serializable Snapshot Isolation
 
 ## Basic Transactions Implementation Plan With 2 PL [WIP]
-1. BEGIN: starts a transaction.
+1. **BEGIN: starts a transaction**. [Done]
     - Create a txn id.
     - Each transaction should be associated with a transaction id.
         - *Why do we need a transaction id?* When we COMMIT or ROLLBACK, all of the acquired locks for different keys need to be released. If we don't create a relevant transaction id, how would we come to know that lock acquired by which txn needs to be released. 
@@ -41,7 +41,7 @@
     - While this map is useful for GET and PUT functions to come to know if a key is locked or not and whether by readers or writers, we also need a way to come to know that what all keys were locked by a transaction_id. This is necessary to release the required locks during GET and PUT.
         map[transaction_id]{ list of keys }. Instead of map, the list of keys acquired
     - When we release locks for a transaction, we need to update both the maps.  
-3. **PUT within a transaction**
+3. **PUT within a transaction**: [Done]
     - **Acquiring Lock**
     - Check for the specific key if some read or write lock is acquired.
     - Read from above map
@@ -60,14 +60,14 @@
     - map[transaction_id][]struct{ key, value }
         - This is not a shared variable as within a goroutine, there can be only one transaction_id
     - These operations will be performed in order during COMMIT.
-4. GET within a transaction:
+4. **GET within a transaction:** [Done]
     - Check buffered write map first for the transaction_id.
     - Check writer
         - If writer txn_id is present and len > 0 and not equal to current txn_id: BLOCK or ABORT
         - Else: update map: readers
             - While updating, check if txn_id is already present in readers slice.
     - If not found, call the existing GET function.
-5. COMMIT 
+5. **COMMIT** 
     - List of all buffered writes need to be replayed as PUT commands.
     - They need to be applied atomically at the WAL also.
     - We will call wal.WriteEntry function only once where the payload would have all of the PUT commands in a single entry.    
@@ -76,11 +76,9 @@
     - Once WAL is written successfully, we move to calling db.memTable.Put function sequentially. Even it this fails, we are fine as when the application restarts, buildMemtableFromWal will take care of populating all the keys ensuring atomicity.
     - After WAL write and Put calls, are locks acquired for txn_id are released.
     - Buffered writes are also cleaned up.
-6. ROLLBACK
+6. **ROLLBACK**
     - All locks released by updating map
     - Buffered writes cleaned up.
-
-### Todo: In order to test better, I need to add support for 
 
 ## Note On Current vs Expected Concurrency Which We Need to Handle
 - We have handled multiple goroutines / threads in the same process via sync.RWMutex.
