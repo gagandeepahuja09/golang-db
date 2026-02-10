@@ -9,6 +9,7 @@ import (
 
 const (
 	WriteLockNotAcquiredDueToReadLocksError = "cannot acquire write lock as read lock acquired by one or more transactions"
+	CmdTransaction                          = "TRANSACTION"
 )
 
 type Transaction struct {
@@ -154,9 +155,9 @@ func (txn *Transaction) Rollback() {
 // structure: [length][payload][offset]
 // payload structure:
 // ----
-// [length_of_command][command][number_of_transactions]
+// [length_of_command][command][number_of_writes]
 // [payload_length_for_1st][payload_for_1st][payload_length_for_2nd][payload_for_2nd]...
-// till N = number_of_transactions
+// till N = number_of_writes
 // ----
 // command is "TRANSACTION" in this case
 // todo: we need to change the structure of payload for PUT command also similar to this.
@@ -182,6 +183,21 @@ func serialiseTransactionCommitPayload(writeMap map[string]string) []byte {
 	return buf
 }
 
+// [number_of_writes][payload_length_for_1st][payload_for_1st][payload_length_for_2nd][payload_for_2nd]...
+func deserialiseTransactionCommand(buf []byte) (payloads []string) {
+	i := 0
+	numWrites := binary.BigEndian.Uint32(buf[i : i+4])
+	i += 4
+	for ; i < int(numWrites); i++ {
+		payloadLength := binary.BigEndian.Uint32(buf[i : i+4])
+		i += 4
+		payload := string(buf[i : i+int(payloadLength)])
+		i += int(payloadLength)
+		payloads = append(payloads, payload)
+	}
+	return payloads
+}
+
 // necessary to do in a single WAL write for atomicity
 func (txn *Transaction) writeSingleWalEntryForCommit() {
 	buf := serialiseTransactionCommitPayload(txn.bufferedWriteMap)
@@ -195,4 +211,7 @@ func (txn *Transaction) Commit() {
 	for key, value := range txn.bufferedWriteMap {
 		txn.db.memTable.Put(key, value)
 	}
+
+	txn.releaseAllLocks()
+	txn.cleanupBufferedWriteMap()
 }
