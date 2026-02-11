@@ -18,12 +18,12 @@ type Wal struct {
 }
 
 // WriteEntry writes [length][payload][checksum] to file
-func (w *Wal) WriteEntry(payload string) error {
+func (w *Wal) WriteEntry(payload []byte) error {
 	buf := make([]byte, 4+len(payload)+4)
 	checksum := crc32.ChecksumIEEE([]byte(payload))
 	// 1. add length
 	binary.BigEndian.PutUint32(buf[0:4], uint32(len(payload)))
-	// 2. add payload / payload
+	// 2. add payload
 	copy(buf[4:4+len(payload)], []byte(payload))
 	// 3. add checksum
 	binary.BigEndian.PutUint32(buf[4+len(payload):], checksum)

@@ -13,6 +13,8 @@ import (
 
 var tempWalFile = "temp.log"
 
+// todo: check why tests are failing
+
 // Testing pattern ==> writes few entries --> restart --> write few more entries --> restart
 // --> read and assert all entries
 // note: separate instances of wal: read and write created for following reasons:
@@ -26,7 +28,7 @@ func TestWal_PersistsAcrossRestart(t *testing.T) {
 	assert.NoError(t, err)
 	for i := 0; i <= 10; i++ {
 		payload := fmt.Sprintf("PUT Key_%d Value_%d", i, i)
-		err = walWrite.WriteEntry(payload)
+		err = walWrite.WriteEntry([]byte(payload))
 		assert.NoError(t, err)
 	}
 	walWrite.Close()
@@ -35,7 +37,7 @@ func TestWal_PersistsAcrossRestart(t *testing.T) {
 	assert.NoError(t, err)
 	for i := 20; i <= 30; i++ {
 		payload := fmt.Sprintf("PUT Key_%d Value_%d", i, i)
-		err = walWriteAfterRestart.WriteEntry(payload)
+		err = walWriteAfterRestart.WriteEntry([]byte(payload))
 		assert.NoError(t, err)
 	}
 	walWriteAfterRestart.Close()
@@ -95,7 +97,7 @@ func TestWal_PartialWrites(t *testing.T) {
 			walWrite, err := NewWal(tempWalFile)
 			assert.NoError(t, err)
 
-			err = walWrite.WriteEntry("PUT key value")
+			err = walWrite.WriteEntry([]byte("PUT key value"))
 			assert.NoError(t, err)
 
 			os.Truncate(tempWalFile, int64(tt.truncateSize))
@@ -134,7 +136,7 @@ func TestWal_CorruptedWrites(t *testing.T) {
 			walWrite, err := NewWal(tempWalFile)
 			assert.NoError(t, err)
 
-			err = walWrite.WriteEntry("PUT key value")
+			err = walWrite.WriteEntry([]byte("PUT key value"))
 			assert.NoError(t, err)
 
 			file, err := os.OpenFile(tempWalFile, os.O_RDWR, 0644)
@@ -155,7 +157,7 @@ func TestWal_Clear(t *testing.T) {
 	assert.NoError(t, err)
 
 	payload := "PUT key value"
-	err = walWrite.WriteEntry(payload)
+	err = walWrite.WriteEntry([]byte(payload))
 	assert.NoError(t, err)
 
 	walRead, err := NewWal(tempWalFile)

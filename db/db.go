@@ -19,21 +19,33 @@ const (
 	SchemaTemplate = "_schema:%s"
 )
 
+type LocksAcquired struct {
+	writerTxnId  uint64
+	readerTxnIds []uint64
+}
+type transactionManager struct {
+	nextTransactionId     uint64
+	mu                    sync.Mutex
+	keyVsLocksAcquiredMap map[string]*LocksAcquired
+}
+
 type DB struct {
-	mu       sync.RWMutex
-	wal      *wal.Wal
-	memTable *memtable.Memtable
-	ssTable  *sstable.SsTable
-	tables   []sqlparser.CreateTable
+	mu                 sync.RWMutex
+	wal                *wal.Wal
+	memTable           *memtable.Memtable
+	ssTable            *sstable.SsTable
+	tables             []sqlparser.CreateTable
+	transactionManager transactionManager
 }
 
 type Config struct {
 	SsTableConfig sstable.Config
+	WalFilePath   string
 }
 
 func NewDB(config Config) (*DB, error) {
 	db := DB{}
-	wal, err := wal.NewWal("")
+	wal, err := wal.NewWal(config.WalFilePath)
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +64,12 @@ func NewDB(config Config) (*DB, error) {
 	db.tables, err = db.getAllTables()
 	if err != nil {
 		return nil, err
+	}
+
+	db.transactionManager = transactionManager{
+		nextTransactionId:     1,
+		mu:                    sync.Mutex{},
+		keyVsLocksAcquiredMap: map[string]*LocksAcquired{},
 	}
 
 	return &db, err
@@ -135,7 +153,18 @@ func (db *DB) flushMemtableToSsTable() error {
 
 func (db *DB) writeToWal(key, value string) error {
 	payload := fmt.Sprintf("PUT %s %s", key, value)
-	return db.wal.WriteEntry(payload)
+	return db.wal.WriteEntry([]byte(payload))
+}
+
+func handlePutCmd(memTable memtable.Memtable, line string) error {
+	args := strings.Split(line, " ")
+	if len(args) != 3 {
+		return errors.New("Expected exactly 2 arguments for PUT command")
+	}
+	key := args[1]
+	value := args[2]
+	memTable.Put(key, value)
+	return nil
 }
 
 func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
@@ -151,14 +180,29 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 		if err != nil {
 			return nil, err
 		}
-		line := string(payload)
-		args := strings.Split(line, " ")
-		if len(args) != 3 {
-			return nil, errors.New("Expected exactly 2 arguments for PUT command\n")
+
+		// check if the command is TRANSACTION first
+		// read first 4 bytes
+		// read next len bytes
+		// check if == TRANSACTION
+		i := 0
+		len := binary.BigEndian.Uint32(payload[i : i+4])
+		i += 4
+		cmd := string(payload[i : i+int(len)])
+		i += int(len)
+		if cmd == CmdTransaction {
+			// this will return the list of PUT commands
+			putCmds := deserialiseTransactionCommand(payload[i:])
+			for _, cmd := range putCmds {
+				if err := handlePutCmd(memTable, cmd); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			if err := handlePutCmd(memTable, string(payload)); err != nil {
+				return nil, err
+			}
 		}
-		key := args[1]
-		value := args[2]
-		memTable.Put(key, value)
 	}
 }
 
@@ -169,6 +213,18 @@ func (db *DB) CreateTable(query string) error {
 		return err
 	}
 	return db.createTable(*input)
+}
+
+func (db *DB) Begin() (*Transaction, error) {
+	db.transactionManager.mu.Lock()
+	defer db.transactionManager.mu.Unlock()
+
+	txn := Transaction{
+		id: db.transactionManager.nextTransactionId,
+		db: db,
+	}
+	db.transactionManager.nextTransactionId++
+	return &txn, nil
 }
 
 func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {

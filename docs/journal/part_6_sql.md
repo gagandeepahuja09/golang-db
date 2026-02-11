@@ -27,7 +27,7 @@
 ## SQL Parsing
 - check command O ==> CREATE TABLE ==> call insertTable function ==> split by comma to get datatype and column name.
 
-## What happens during CREATE TABLE?
+## What happens during CREATE TABLE? [Done]
 - CREATE TABLE payments (id int, is_refundable bool, amount int, status string)
 - maintain a struct for Table in-memory.
 - For V1, not adding any table_id
@@ -56,7 +56,7 @@
 ## What happens during INSERT INTO ...?
 - Call Put function, Key: [<table_name>:<primary_key_id>], Value: [dataLength1][data1][data2][dataLength3][data3].
 - length will be prefix for tables which have variable length data type. 1 and 3 are variable types in above example.
-- This is written in Memetable, Wal and SSTable.
+- This is written in Memtable, Wal and SSTable.
 
 ## What happens during SELECT ?
 - Starting with only SELECT * and only SELECT on primary key.
@@ -69,6 +69,17 @@ Things to think about:
 
   1. Key prefix collision: Your schema key is create_table:<table_name>. What if someone creates a table literally named create_table? Then you'd have create_table:create_table as schema key, and create_table:123 could be ambiguous (is it a row in table "create_table" or schema for table "123"?).
 
-  1. Consider: use a prefix that can't be a valid table name, like _schema: or \x00schema:.
-  2. Startup recovery: You have tableNameVsMetadataMap in memory. When your DB restarts, how do you rebuild this map? You'll need to scan for all create_table:* keys and reload schemas.
-  3. Small typo in your doc line 33: [columnName2] appears twice - should be [columnName1] then [columnName2].
+  1. Consider: use a prefix that can't be a valid table name, like _schema: or \x00schema:. [Done]
+  2. Startup recovery: You have tableNameVsMetadataMap in memory. When your DB restarts, how do you rebuild this map? You'll need to scan for all create_table:* keys and reload schemas. [Done]
+
+### Todo: SQL Planner ==> When is that useful?
+* When there are multiple WHERE conditions (multiple indexes) or multiple tables or multiple join algorithms.
+
+* Parser → converts query string to a struct
+* Serialiser → serialises in DB in byte array such that it can be easily deserialised during reads.
+
+### Todo: SELECT range-based queries
+* As of now, the data is sorted in lexicographic order. This means that 100 will come before 11.
+* For range-based queries like `WHERE age > 10 AND age < 15`, it won't work.
+
+In order to learn internals of database better, I am building one in golang. I have built a key-value store with ss table, index blocks, compaction and was now adding SQL capabilities. added create table and then will add insert and select commands. there are multiple path ways: focus on alter after that, like column addition or deletion OR select capabilities range based / joins / query planner OR potentially most interesting: Transaction capabilities and ISOLATION levels. help me plan what to choose?
