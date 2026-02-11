@@ -188,7 +188,7 @@ func deserialiseTransactionCommand(buf []byte) (payloads []string) {
 	i := 0
 	numWrites := binary.BigEndian.Uint32(buf[i : i+4])
 	i += 4
-	for ; i < int(numWrites); i++ {
+	for j := 0; j < int(numWrites); j++ {
 		payloadLength := binary.BigEndian.Uint32(buf[i : i+4])
 		i += 4
 		payload := string(buf[i : i+int(payloadLength)])

@@ -40,11 +40,12 @@ type DB struct {
 
 type Config struct {
 	SsTableConfig sstable.Config
+	WalFilePath   string
 }
 
 func NewDB(config Config) (*DB, error) {
 	db := DB{}
-	wal, err := wal.NewWal("")
+	wal, err := wal.NewWal(config.WalFilePath)
 	if err != nil {
 		return nil, err
 	}

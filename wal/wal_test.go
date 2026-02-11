@@ -136,7 +136,7 @@ func TestWal_CorruptedWrites(t *testing.T) {
 			walWrite, err := NewWal(tempWalFile)
 			assert.NoError(t, err)
 
-			err = walWrite.WriteEntry("PUT key value")
+			err = walWrite.WriteEntry([]byte("PUT key value"))
 			assert.NoError(t, err)
 
 			file, err := os.OpenFile(tempWalFile, os.O_RDWR, 0644)
