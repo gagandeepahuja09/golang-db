@@ -181,17 +181,14 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 			return nil, err
 		}
 
-		// check if the command is TRANSACTION first
-		// read first 4 bytes
-		// read next len bytes
-		// check if == TRANSACTION
+		// read [command_length(4_bytes)][command_string] to figure out the command type
+		// and accordingly deserialise.
 		i := 0
 		len := binary.BigEndian.Uint32(payload[i : i+4])
 		i += 4
 		cmd := string(payload[i : i+int(len)])
 		i += int(len)
 		if cmd == CmdTransaction {
-			// this will return the list of PUT commands
 			putCmds := deserialiseTransactionCommand(payload[i:])
 			for _, cmd := range putCmds {
 				if err := handlePutCmd(memTable, cmd); err != nil {

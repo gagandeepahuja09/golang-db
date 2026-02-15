@@ -29,7 +29,7 @@
     - Not full serializability: write skew can still happen
 3. Serializable Snapshot Isolation
 
-## Basic Transactions Implementation Plan With 2 PL [WIP]
+## Basic Transactions Implementation Plan With 2 PL [Done]
 1. **BEGIN: starts a transaction**. [Done]
     - Create a txn id.
     - Each transaction should be associated with a transaction id.
@@ -85,4 +85,52 @@
 - We need to solve for multiple processes, each having their own DB instances.
 - They need a file-level lock to coordinate.
 
-### Testing Plan
+## MVCC
+* With 2 PL, we have implemented Serializable isolation.
+* 2PL gives us the strongest level of isolation but that comes at the cost of concurrency as readers block writers and writers block readers.
+* MVCC takes an optimistic approach of detecting data integrity issues before they are committed.
+* Problem with MVCC: Write Skew.
+* https://vladmihalcea.com/write-skew-2pl-mvcc/
+
+### Write Skew Problem
+Constraint: x + y >= 0
+x = 5, y = 5
+T1: reads x = 5, y = 5, sets x = -5 ==> constraint valid ==> commits
+T2: reads x = 5, y = 5, sets y = -5 ==> constraint valid ==> commits
+Result ==> x + y = -10
+
+### How can we improve the concurrency? How can we ensure that readers and writers don't block each other?
+-  T1, T2 begin
+- PUT abc, 123 --> T2 
+- GET abc --> T1
+- We can solve read uncommitted by ensuring transactions only read their buffered writes. But this doesn't solve the non-repeatable read problem.
+
+### Non-repeatable read problem
+- Same key read twice, gives different values.
+- GET abc 50 -> T1
+- PUT abc 100 -> T2
+- T2 COMMIT
+- GET abc -> 100
+#### Why is non-repeatable read such a big problem?
+- Many transactions do this:
+    - Read something
+    - Make a decision 
+    - Perform an operation
+- In such cases, while perform an operation, some transaction committed, hence they are instead operating on inconsistencies.
+- T1: GET abc -> 50
+- T2 committed and did PUT abc 100
+- T1: PUT abc = abc + 20 ==> T1 is acting on stale assumptions.
+- One way to solve the non-repeatable read problem is by writing smarter queries. This is called as **compare-and-swap** also. Example:
+    - BEGIN
+    - SELECT amount FROM payments where id = 123;
+    - UPDATE amount SET amount = amount + 100 WHERE id = 123 and amount = {read_from_query_above};
+    - COMMIT
+- Compare-and-swap might be common in production systems but it only works when :
+    - Limited to 1 row.
+    - Applications have ability to retry or handle cases where no row is updated. 
+
+### Intuition Behind MVCC   
+- Implementing this doesn't seem that interesting?
+
+#### PLAN
+* Should I build INSERT --> SELECT --> Multiple AND SUPPORT --> RANGE QUERIES SUPPORT --> INDEXES --> COMPOSITE INDEXES --> null COLUMNS SUPPORT --> ALTER COMMAND SUPPORT?

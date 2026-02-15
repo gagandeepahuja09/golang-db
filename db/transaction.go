@@ -161,8 +161,6 @@ func (txn *Transaction) Rollback() {
 // ----
 // command is "TRANSACTION" in this case
 // todo: we need to change the structure of payload for PUT command also similar to this.
-// writeToWal
-// txn.db.wal.WriteEntry()
 func serialiseTransactionCommitPayload(writeMap map[string]string) []byte {
 	payloads := []string{}
 	for key, value := range writeMap {
