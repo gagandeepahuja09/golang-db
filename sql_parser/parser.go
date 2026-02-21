@@ -6,7 +6,10 @@ import (
 
 const (
 	KeywordCreate            = "CREATE"
+	KeywordInsert            = "INSERT"
+	KeywordInto              = "INTO"
 	KeywordTable             = "TABLE"
+	KeywordValues            = "VALUES"
 	KeywordPrimary           = "PRIMARY"
 	KeywordKey               = "KEY"
 	SymbolOpenRoundBracket   = "("
@@ -144,5 +147,53 @@ func (p *Parser) ParseCreateTable() (*CreateTable, error) {
 		TableName:                tableName,
 		ColumnDetails:            columnDetails,
 		PrimaryKeyColumnPosition: pkColumnPosition,
+	}, nil
+}
+
+// INSERT INTO has 2 syntaxes:
+// 1. All column values provided
+// INSERT INTO table_name VALUES (all values ...)
+// 2. Specific column values provided
+// INSERT INTO table_name (col1, col2, col3) VALUES (only the provided column values ...)
+// We are supporting only 2 for now.
+func (p *Parser) ParseInsertIntoTable() (*InsertIntoTable, error) {
+	if err := p.consume(KEYWORD, KeywordInsert); err != nil {
+		return nil, err
+	}
+	if err := p.consume(KEYWORD, KeywordInto); err != nil {
+		return nil, err
+	}
+	tableName := p.currentToken.Value
+	if err := p.consume(IDENTIFIER, ""); err != nil {
+		return nil, err
+	}
+
+	if err := p.consume(KEYWORD, KeywordValues); err != nil {
+		return nil, err
+	}
+	if err := p.consume(SYMBOL, SymbolOpenRoundBracket); err != nil {
+		return nil, err
+	}
+
+	columnValues := []string{}
+	for p.currentToken.Value != SymbolClosedRoundBracket {
+		if p.currentToken.Value == "," {
+			p.consume(SYMBOL, ",")
+		}
+
+		columnValue := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
+		}
+		columnValues = append(columnValues, columnValue)
+	}
+
+	if err := p.consume(SYMBOL, SymbolClosedRoundBracket); err != nil {
+		return nil, err
+	}
+
+	return &InsertIntoTable{
+		TableName:    tableName,
+		ColumnValues: columnValues,
 	}, nil
 }

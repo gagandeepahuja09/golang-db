@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,12 +31,12 @@ type transactionManager struct {
 }
 
 type DB struct {
-	mu                 sync.RWMutex
-	wal                *wal.Wal
-	memTable           *memtable.Memtable
-	ssTable            *sstable.SsTable
-	tables             []sqlparser.CreateTable
-	transactionManager transactionManager
+	mu                   sync.RWMutex
+	wal                  *wal.Wal
+	memTable             *memtable.Memtable
+	ssTable              *sstable.SsTable
+	tableNameVsSchemaMap map[string]sqlparser.CreateTable
+	transactionManager   transactionManager
 }
 
 type Config struct {
@@ -61,7 +62,7 @@ func NewDB(config Config) (*DB, error) {
 		return nil, err
 	}
 
-	db.tables, err = db.getAllTables()
+	db.tableNameVsSchemaMap, err = db.getTableNameVsSchemaMap()
 	if err != nil {
 		return nil, err
 	}
@@ -75,8 +76,8 @@ func NewDB(config Config) (*DB, error) {
 	return &db, err
 }
 
-func (db *DB) getAllTables() ([]sqlparser.CreateTable, error) {
-	tables := []sqlparser.CreateTable{}
+func (db *DB) getTableNameVsSchemaMap() (map[string]sqlparser.CreateTable, error) {
+	tableNameVsSchemaMap := map[string]sqlparser.CreateTable{}
 	tablesString, err := db.Get(CatalogKey)
 	if err != nil || tablesString == "" {
 		return nil, err
@@ -93,9 +94,9 @@ func (db *DB) getAllTables() ([]sqlparser.CreateTable, error) {
 			return nil, err
 		}
 		createTableInput.TableName = tableName
-		tables = append(tables, *createTableInput)
+		tableNameVsSchemaMap[tableName] = *createTableInput
 	}
-	return tables, nil
+	return tableNameVsSchemaMap, nil
 }
 
 func (db *DB) Close() {
@@ -181,17 +182,14 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 			return nil, err
 		}
 
-		// check if the command is TRANSACTION first
-		// read first 4 bytes
-		// read next len bytes
-		// check if == TRANSACTION
+		// read [command_length(4_bytes)][command_string] to figure out the command type
+		// and accordingly deserialise.
 		i := 0
 		len := binary.BigEndian.Uint32(payload[i : i+4])
 		i += 4
 		cmd := string(payload[i : i+int(len)])
 		i += int(len)
 		if cmd == CmdTransaction {
-			// this will return the list of PUT commands
 			putCmds := deserialiseTransactionCommand(payload[i:])
 			for _, cmd := range putCmds {
 				if err := handlePutCmd(memTable, cmd); err != nil {
@@ -228,15 +226,17 @@ func (db *DB) Begin() (*Transaction, error) {
 }
 
 func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
-	db.tables = append(db.tables, createTableInput)
+	// todo: checking for table name already exists
+	// todo: since we are doing 2 different Put operations, createTable is not actually atomic
+	db.tableNameVsSchemaMap[createTableInput.TableName] = createTableInput
 
 	var tableNames string
-	for i, table := range db.tables {
+	for _, table := range db.tableNameVsSchemaMap {
 		tableNames += table.TableName
-		if i < len(db.tables)-1 {
-			tableNames += ","
-		}
+		tableNames += ","
 	}
+	tableNamesLength := len(tableNames)
+	tableNames = tableNames[:tableNamesLength-1]
 
 	// PERFORM PUT operation with _catalog key and all table names.
 	db.Put(CatalogKey, tableNames)
@@ -248,16 +248,79 @@ func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
 	return nil
 }
 
+func (db *DB) InsertIntoTable(query string) error {
+	parser := sqlparser.NewParser(query)
+	input, err := parser.ParseInsertIntoTable()
+	if err != nil {
+		return err
+	}
+	table := db.tableNameVsSchemaMap[input.TableName]
+	if len(input.ColumnValues) != len(table.ColumnDetails) {
+		return errors.New("INSERT INTO requires all columns to be present. ")
+	}
+	return db.insertIntoTable(*input)
+}
+
+// key: table_name:primary_key_value
+// value: [value1][size_of_value2][value2][value3]
+// value1 and value2 are fixed sized datatype like int and bool while value2 is variable sized
+// datatype like string.
+// todo: value of primary_key is stored unnecessarily twice (both in key and value)
+// todo: lexicographic ordering is currently as per string: 100 will come before 11. this won't
+// work for SELECT range queries.
+func (db *DB) serialiseInsertIntoTableInput(insertIntoTableInput sqlparser.InsertIntoTable) (
+	key string, valueSchemaBuf []byte, err error) {
+	tableName := insertIntoTableInput.TableName
+	table := db.tableNameVsSchemaMap[tableName]
+	primaryKeyValue := ""
+	for i, columnValue := range insertIntoTableInput.ColumnValues {
+		if i == table.PrimaryKeyColumnPosition {
+			primaryKeyValue = columnValue
+		}
+		switch table.ColumnDetails[i].DataType {
+		case sqlparser.Int:
+			valueInt, err := strconv.Atoi(columnValue)
+			if err != nil {
+				return "", nil, err
+			}
+			valueSchemaBuf = binary.BigEndian.AppendUint32(valueSchemaBuf, uint32(valueInt))
+		case sqlparser.String:
+			valueSchemaBuf = binary.BigEndian.AppendUint32(valueSchemaBuf, uint32(len(columnValue)))
+			valueSchemaBuf = append(valueSchemaBuf, []byte(columnValue)...)
+		case sqlparser.Bool:
+			// only 0, 1 supported and not true, false
+			valueInt, err := strconv.Atoi(columnValue)
+			if err != nil {
+				return "", nil, err
+			}
+			if valueInt != 0 && valueInt != 1 {
+				valueSchemaBuf = append(valueSchemaBuf, uint8(valueInt))
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s:%s", tableName, primaryKeyValue), valueSchemaBuf, nil
+}
+
+func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) error {
+	key, valueSchemaBuf, err := db.serialiseInsertIntoTableInput(insertIntoTableInput)
+	if err != nil {
+		return err
+	}
+	// todo: validate if all columns covered
+	return db.Put(key, string(valueSchemaBuf))
+}
+
 func (db *DB) ShowTables() []string {
 	tableNames := []string{}
-	for _, table := range db.tables {
+	for _, table := range db.tableNameVsSchemaMap {
 		tableNames = append(tableNames, table.TableName)
 	}
 	return tableNames
 }
 
 func (db *DB) ShowCreateTable(tableName string) (*sqlparser.CreateTable, error) {
-	for _, table := range db.tables {
+	for _, table := range db.tableNameVsSchemaMap {
 		if table.TableName == tableName {
 			return &table, nil
 		}

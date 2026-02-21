@@ -48,10 +48,21 @@ func main() {
 			}
 		case "CREATE":
 			if len(args) > 1 && args[1] == "TABLE" {
-				cmdCreateTable(db, line)
+				if err := cmdCreateTable(db, line); err != nil {
+					fmt.Println("Error while running CREATE TABLE command: '%s'", err.Error())
+				} else {
+					fmt.Println("CREATE TABLE performed successfully")
+				}
 			} else {
 				fmt.Println(CommandNotSupported)
 			}
+		case "INSERT":
+			if err := cmdInsertIntoTable(db, line); err != nil {
+				fmt.Println("Error while running INSERT INTO command: '%s'", err.Error())
+			} else {
+				fmt.Println("INSERT INTO performed successfully")
+			}
+
 		case "EXIT":
 			breakLoop = true
 		default:
@@ -92,4 +103,8 @@ func cmdPut(db *db.DB, args []string) error {
 
 func cmdCreateTable(db *db.DB, query string) error {
 	return db.CreateTable(query)
+}
+
+func cmdInsertIntoTable(db *db.DB, query string) error {
+	return db.InsertIntoTable(query)
 }

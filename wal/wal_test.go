@@ -13,8 +13,6 @@ import (
 
 var tempWalFile = "temp.log"
 
-// todo: check why tests are failing
-
 // Testing pattern ==> writes few entries --> restart --> write few more entries --> restart
 // --> read and assert all entries
 // note: separate instances of wal: read and write created for following reasons:
