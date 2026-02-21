@@ -23,6 +23,9 @@ var keywords = map[string]bool{
 	KeywordTable:   true,
 	KeywordPrimary: true,
 	KeywordKey:     true,
+	KeywordInsert:  true,
+	KeywordInto:    true,
+	KeywordValues:  true,
 }
 
 type Token struct {

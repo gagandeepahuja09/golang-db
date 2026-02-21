@@ -248,6 +248,19 @@ func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
 	return nil
 }
 
+func (db *DB) InsertIntoTable(query string) error {
+	parser := sqlparser.NewParser(query)
+	input, err := parser.ParseInsertIntoTable()
+	if err != nil {
+		return err
+	}
+	table := db.tableNameVsSchemaMap[input.TableName]
+	if len(input.ColumnValues) != len(table.ColumnDetails) {
+		return errors.New("INSERT INTO requires all columns to be present. ")
+	}
+	return db.insertIntoTable(*input)
+}
+
 // key: table_name:primary_key_value
 // value: [value1][size_of_value2][value2][value3]
 // value1 and value2 are fixed sized datatype like int and bool while value2 is variable sized
@@ -275,7 +288,7 @@ func (db *DB) serialiseInsertIntoTableInput(insertIntoTableInput sqlparser.Inser
 			valueSchemaBuf = binary.BigEndian.AppendUint32(valueSchemaBuf, uint32(len(columnValue)))
 			valueSchemaBuf = append(valueSchemaBuf, []byte(columnValue)...)
 		case sqlparser.Bool:
-			// only 0, 1 supported for now
+			// only 0, 1 supported and not true, false
 			valueInt, err := strconv.Atoi(columnValue)
 			if err != nil {
 				return "", nil, err
@@ -294,6 +307,7 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 	if err != nil {
 		return err
 	}
+	// todo: validate if all columns covered
 	return db.Put(key, string(valueSchemaBuf))
 }
 

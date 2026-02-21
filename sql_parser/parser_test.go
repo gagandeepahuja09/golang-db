@@ -101,3 +101,46 @@ func TestParseCreateTable(t *testing.T) {
 		})
 	}
 }
+
+func TestParseInsertIntoTable(t *testing.T) {
+	testCases := []struct {
+		name                    string
+		inputQuery              string
+		expectedInsertIntoTable InsertIntoTable
+		expectedError           string
+	}{
+		{
+			name:                    "Insert into only",
+			inputQuery:              "INSERT INTO",
+			expectedInsertIntoTable: InsertIntoTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got EOF \"\"",
+		},
+		{
+			name:                    "Insert with table name but no VALUES",
+			inputQuery:              "INSERT INTO payments ()",
+			expectedInsertIntoTable: InsertIntoTable{},
+			expectedError:           "syntax error: expected KEYWORD \"VALUES\", got SYMBOL \"(\"",
+		},
+		{
+			name:       "Insert but with no column values",
+			inputQuery: "INSERT INTO payments VALUES (1234, age, 0)",
+			expectedInsertIntoTable: InsertIntoTable{
+				TableName:    "payments",
+				ColumnValues: []string{"1234", "age", "0"},
+			},
+			expectedError: "",
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.inputQuery)
+			input, err := parser.ParseInsertIntoTable()
+			if err != nil {
+				assert.Equal(t, tt.expectedError, err.Error())
+			} else {
+				assert.Equal(t, tt.expectedInsertIntoTable, *input)
+			}
+		})
+	}
+}

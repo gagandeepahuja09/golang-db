@@ -20,3 +20,17 @@
 ======================================= NOT NEEDED ====================================================
 
 - Above can instead be solved by prefix scan.
+- Todo: see how these commands: CREATE TABLE, INSERT INTO and SELECT perform at scale and what needs to be done differently for supporting them.
+    - How does full-table scan work with millions of rows?
+    - How to support constraints like UNIQUE?
+    - Adding INDEX support
+    - ALTER Table command support
+    - NOT NULL constraint support
+    - Support 2 kinds of INSERT INTO syntaxes and the implications of it on how much space is consumed. 
+- Supporting NULL values in database.
+    - NULL values are different from zero values.
+    - One key feature of NULL value should be that it doesn't take up space in the database.
+    - How do we implement it?
+    - Currently how we serialise data is such that we reserve 4 bytes for integer type while reading.
+    - Alternately we can store an additional byte telling whether it is NULL or NOT NULL.
+    - If it is null, we don't read the 4 bytes.
