@@ -58,9 +58,19 @@ func main() {
 			}
 		case "INSERT":
 			if err := cmdInsertIntoTable(db, line); err != nil {
-				fmt.Println("Error while running INSERT INTO command: '%s'", err.Error())
+				fmt.Printf("Error while running INSERT INTO command: '%s'\n", err.Error())
 			} else {
 				fmt.Println("INSERT INTO performed successfully")
+			}
+		case "SELECT":
+			if len(args) > 1 && args[1] == "TABLE" {
+				if err := cmdSelectFromTable(db, line); err != nil {
+					fmt.Println("Error while running CREATE TABLE command: '%s'", err.Error())
+				} else {
+					fmt.Println("CREATE TABLE performed successfully")
+				}
+			} else {
+				fmt.Println(CommandNotSupported)
 			}
 
 		case "EXIT":
@@ -107,4 +117,9 @@ func cmdCreateTable(db *db.DB, query string) error {
 
 func cmdInsertIntoTable(db *db.DB, query string) error {
 	return db.InsertIntoTable(query)
+}
+
+func cmdSelectFromTable(db *db.DB, query string) error {
+	// return db.SelectFromTable(query)
+	return errors.New("yet to be implemented")
 }

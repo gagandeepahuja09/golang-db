@@ -1,6 +1,7 @@
 package sqlparser
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 )
@@ -14,8 +15,13 @@ const (
 	EOF        TokenType = "EOF"
 )
 
-const (
-	symbols = "(),;"
+var (
+	symbols = fmt.Sprintf("%s%s%s%s%s",
+		SymbolOpenRoundBracket,
+		SymbolClosedRoundBracket,
+		SymbolComma,
+		SymbolSemiColon,
+		SymbolStar)
 )
 
 var keywords = map[string]bool{
@@ -26,6 +32,10 @@ var keywords = map[string]bool{
 	KeywordInsert:  true,
 	KeywordInto:    true,
 	KeywordValues:  true,
+	KeywordSelect:  true,
+	KeywordFrom:    true,
+	KeywordWhere:   true,
+	KeywordAnd:     true,
 }
 
 type Token struct {

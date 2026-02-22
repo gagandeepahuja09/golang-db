@@ -254,10 +254,6 @@ func (db *DB) InsertIntoTable(query string) error {
 	if err != nil {
 		return err
 	}
-	table := db.tableNameVsSchemaMap[input.TableName]
-	if len(input.ColumnValues) != len(table.ColumnDetails) {
-		return errors.New("INSERT INTO requires all columns to be present. ")
-	}
 	return db.insertIntoTable(*input)
 }
 
@@ -303,11 +299,14 @@ func (db *DB) serialiseInsertIntoTableInput(insertIntoTableInput sqlparser.Inser
 }
 
 func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) error {
+	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
+	if len(insertIntoTableInput.ColumnValues) != len(table.ColumnDetails) {
+		return errors.New("INSERT INTO requires all columns to be present. ")
+	}
 	key, valueSchemaBuf, err := db.serialiseInsertIntoTableInput(insertIntoTableInput)
 	if err != nil {
 		return err
 	}
-	// todo: validate if all columns covered
 	return db.Put(key, string(valueSchemaBuf))
 }
 

@@ -1,19 +1,31 @@
 package sqlparser
 
 import (
+	"errors"
 	"fmt"
 )
 
 const (
 	KeywordCreate            = "CREATE"
+	KeywordTable             = "TABLE"
 	KeywordInsert            = "INSERT"
 	KeywordInto              = "INTO"
-	KeywordTable             = "TABLE"
 	KeywordValues            = "VALUES"
+	KeywordSelect            = "SELECT"
+	KeywordFrom              = "FROM"
+	KeywordWhere             = "WHERE"
+	KeywordAnd               = "AND"
 	KeywordPrimary           = "PRIMARY"
 	KeywordKey               = "KEY"
 	SymbolOpenRoundBracket   = "("
 	SymbolClosedRoundBracket = ")"
+	SymbolComma              = ","
+	SymbolSemiColon          = ";"
+	SymbolStar               = "*"
+)
+
+const (
+	ColumnsSelectLimit = 10
 )
 
 type Parser struct {
@@ -30,6 +42,8 @@ func NewParser(input string) *Parser {
 	}
 }
 
+// todo: the error messaging needs to be made better such that user doesn't need to go through code
+// or any doc.
 func (p *Parser) consume(tt TokenType, expectedVal string) error {
 	if p.currentToken.Type != tt || (expectedVal != "" && p.currentToken.Value != expectedVal) {
 		return fmt.Errorf(
@@ -94,8 +108,6 @@ func (p *Parser) ParseCreateTable() (*CreateTable, error) {
 		if p.currentToken.Value == "," {
 			p.consume(SYMBOL, ",")
 		}
-
-		// todo: add an error for maximum columns limit
 		if p.currentToken.Value == KeywordPrimary {
 			var err error
 			pkColumn, err = p.parsePrimaryKeyColumn()
@@ -195,5 +207,102 @@ func (p *Parser) ParseInsertIntoTable() (*InsertIntoTable, error) {
 	return &InsertIntoTable{
 		TableName:    tableName,
 		ColumnValues: columnValues,
+	}, nil
+}
+
+func (p *Parser) parseColumnsFromSelectQuery() ([]string, error) {
+	columnsRequired := []string{}
+	for i := 0; p.currentToken.Value != KeywordFrom; i++ {
+		if p.currentToken.Value == SymbolComma {
+			if err := p.consume(SYMBOL, SymbolComma); err != nil {
+				return nil, err
+			}
+		}
+		if i == ColumnsSelectLimit {
+			return nil, errors.New("maximum 10 columns supported in SELECT query")
+		}
+		if p.currentToken.Value == SymbolStar {
+			if err := p.consume(SYMBOL, SymbolStar); err != nil {
+				return nil, err
+			}
+			columnsRequired = append(columnsRequired, SymbolStar)
+		} else {
+			columnName := p.currentToken.Value
+			fmt.Printf("columnName1111: %v\n", columnName)
+			columnsRequired = append(columnsRequired, columnName)
+			if err := p.consume(IDENTIFIER, ""); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return columnsRequired, nil
+}
+
+func (p *Parser) parseQueryConditionsFromSelectQuery() ([]QueryCondition, error) {
+	if err := p.consume(KEYWORD, KeywordWhere); err != nil {
+		return nil, err
+	}
+	queryConditions := []QueryCondition{}
+	fmt.Println("BEFORE_SEMI_COLON_111")
+	for p.currentToken.Value != SymbolSemiColon {
+		if p.currentToken.Value == KeywordAnd {
+			if err := p.consume(KEYWORD, KeywordAnd); err != nil {
+				return nil, err
+			}
+		}
+
+		columnName := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
+		}
+
+		queryType := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
+		}
+
+		value := p.currentToken.Value
+		if err := p.consume(IDENTIFIER, ""); err != nil {
+			return nil, err
+		}
+
+		queryConditions = append(queryConditions, QueryCondition{
+			ColumnName: columnName,
+			QueryType:  QueryType(queryType),
+			Value:      value,
+		})
+	}
+	return queryConditions, nil
+}
+
+// todo: add a validation before calling Parser. The last character should be ;
+func (p *Parser) ParseSelectFromTable() (*SelectFromTable, error) {
+	if err := p.consume(KEYWORD, KeywordSelect); err != nil {
+		return nil, err
+	}
+	columnsRequired, err := p.parseColumnsFromSelectQuery()
+	if err != nil {
+		return nil, err
+	}
+	fmt.Println("BEFORE_FROM_111")
+	if err := p.consume(KEYWORD, KeywordFrom); err != nil {
+		return nil, err
+	}
+	tableName := p.currentToken.Value
+	if err := p.consume(IDENTIFIER, ""); err != nil {
+		return nil, err
+	}
+	var queryConditions []QueryCondition
+	if p.currentToken.Value == KeywordWhere {
+		queryConditions, err = p.parseQueryConditionsFromSelectQuery()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &SelectFromTable{
+		TableName:       tableName,
+		ColumnsRequired: columnsRequired,
+		QueryConditions: queryConditions,
 	}, nil
 }

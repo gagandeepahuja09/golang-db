@@ -122,7 +122,7 @@ func TestParseInsertIntoTable(t *testing.T) {
 			expectedError:           "syntax error: expected KEYWORD \"VALUES\", got SYMBOL \"(\"",
 		},
 		{
-			name:       "Insert but with no column values",
+			name:       "Insert with column values",
 			inputQuery: "INSERT INTO payments VALUES (1234, age, 0)",
 			expectedInsertIntoTable: InsertIntoTable{
 				TableName:    "payments",
@@ -140,6 +140,44 @@ func TestParseInsertIntoTable(t *testing.T) {
 				assert.Equal(t, tt.expectedError, err.Error())
 			} else {
 				assert.Equal(t, tt.expectedInsertIntoTable, *input)
+			}
+		})
+	}
+}
+
+func TestParseSelectFromTable(t *testing.T) {
+	testCases := []struct {
+		name                    string
+		inputQuery              string
+		expectedSelectFromTable SelectFromTable
+		expectedError           string
+	}{
+		{
+			name:                    "Only select",
+			inputQuery:              "SELECT;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got SYMBOL \";\"",
+		},
+		{
+			name:       "Select correct query without WHERE clause",
+			inputQuery: "SELECT * FROM students;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "students",
+				ColumnsRequired: []string{"*"},
+				QueryConditions: nil,
+			},
+			expectedError: "",
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.inputQuery)
+			input, err := parser.ParseSelectFromTable()
+			if err != nil {
+				assert.Equal(t, tt.expectedError, err.Error())
+			} else {
+				assert.Equal(t, tt.expectedSelectFromTable, *input)
 			}
 		})
 	}
