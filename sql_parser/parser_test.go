@@ -183,6 +183,15 @@ func TestParseSelectFromTable(t *testing.T) {
 			expectedError:           "maximum 10 columns supported in SELECT query",
 		},
 		{
+			name:       "Select 10 columns",
+			inputQuery: "SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 FROM table1;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "table1",
+				ColumnsRequired: []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10"},
+			},
+			expectedError: "maximum 10 columns supported in SELECT query",
+		},
+		{
 			name:                    "No Column selected",
 			inputQuery:              "SELECT FROM table1;",
 			expectedSelectFromTable: SelectFromTable{},
@@ -214,7 +223,13 @@ func TestParseSelectFromTable(t *testing.T) {
 			name:                    "Select with WHERE clause but condition only having column name",
 			inputQuery:              "SELECT * FROM students WHERE name;",
 			expectedSelectFromTable: SelectFromTable{},
-			expectedError:           "syntax error: expected IDENTIFIER \"query condition\", got SYMBOL \";\"",
+			expectedError:           "syntax error: expected CONDITIONAL_OPERATOR, got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select with WHERE clause but condition not having expected column conditional operator",
+			inputQuery:              "SELECT * FROM students WHERE name IS;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected CONDITIONAL_OPERATOR, got IDENTIFIER \"IS\"",
 		},
 		{
 			name:                    "Select with WHERE clause but condition not having column value",
@@ -222,6 +237,39 @@ func TestParseSelectFromTable(t *testing.T) {
 			expectedSelectFromTable: SelectFromTable{},
 			expectedError:           "syntax error: expected IDENTIFIER \"query value\", got SYMBOL \";\"",
 		},
+		{
+			// todo: we need to support multi-word string like: WHERE name = 'Gagandeep Singh Ahuja'
+			name:       "Select with WHERE clause and complete condition",
+			inputQuery: "SELECT * FROM students WHERE name = Gagan;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "students",
+				ColumnsRequired: []string{"*"},
+				QueryConditions: []QueryCondition{{
+					ColumnName: "name",
+					Value:      "Gagan",
+					QueryType:  "=",
+				},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name:       "Select with WHERE clause and complete condition",
+			inputQuery: "SELECT * FROM students WHERE name == Gagan;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "students",
+				ColumnsRequired: []string{"*"},
+				QueryConditions: []QueryCondition{{
+					ColumnName: "name",
+					Value:      "Gagan",
+					// todo: this should not be supported
+					QueryType: "==",
+				},
+				},
+			},
+			expectedError: "",
+		},
+		// todo: tests for AND condition
 	}
 
 	for _, tt := range testCases {

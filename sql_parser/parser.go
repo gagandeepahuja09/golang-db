@@ -52,6 +52,11 @@ func NewParser(input string) *Parser {
 // or any doc.
 func (p *Parser) consume(tt TokenType, expectedVal, identifierType string) error {
 	if p.currentToken.Type != tt || (expectedVal != "" && p.currentToken.Value != expectedVal) {
+		if expectedVal == "" && tt == CONDITIONAL_OPERATOR {
+			return fmt.Errorf(
+				"syntax error: expected %s, got %s %q",
+				tt, p.currentToken.Type, p.currentToken.Value)
+		}
 		if tt == IDENTIFIER && identifierType != "" {
 			if expectedVal == "" {
 				return fmt.Errorf(
@@ -267,7 +272,7 @@ func (p *Parser) parseQueryConditionsFromSelectQuery() ([]QueryCondition, error)
 				return nil, err
 			}
 		}
-		if i == 10 {
+		if i == 11 {
 			return nil, errors.New("maximum 10 AND conditions supported")
 		}
 
@@ -276,10 +281,8 @@ func (p *Parser) parseQueryConditionsFromSelectQuery() ([]QueryCondition, error)
 			return nil, err
 		}
 
-		// todo: validation on identifier query conditions possible values
-		// example WHERE age IS 5 ==> incorrect, WHERE age = 5 ==> correct
 		queryType := p.currentToken.Value
-		if err := p.consume(IDENTIFIER, "", IdentifierQueryCondition); err != nil {
+		if err := p.consume(CONDITIONAL_OPERATOR, "", ""); err != nil {
 			return nil, err
 		}
 
