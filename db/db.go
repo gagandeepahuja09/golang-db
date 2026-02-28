@@ -298,6 +298,35 @@ func (db *DB) serialiseInsertIntoTableInput(insertIntoTableInput sqlparser.Inser
 	return fmt.Sprintf("%s:%s", tableName, primaryKeyValue), valueSchemaBuf, nil
 }
 
+// value: [value1][size_of_value2][value2][value3]
+func (db *DB) deserializeRowValues(tableName, value string) ([]string, error) {
+	// read byte inputs
+	schema := db.tableNameVsSchemaMap[tableName]
+	valueBuf := []byte(value)
+	i := 0
+	rowValues := []string{}
+	for _, col := range schema.ColumnDetails {
+		switch col.DataType {
+		case sqlparser.Int:
+			val := string(binary.BigEndian.Uint32(valueBuf[i : i+4]))
+			rowValues = append(rowValues, val)
+			i += 4
+		case sqlparser.String:
+			len := int(binary.BigEndian.Uint32(valueBuf[i : i+4]))
+			i += 4
+			val := string(valueBuf[i : i+len])
+			rowValues = append(rowValues, val)
+			i += len
+
+		case sqlparser.Bool:
+			val := string(valueBuf[i])
+			rowValues = append(rowValues, val)
+			i++
+		}
+	}
+	return rowValues, nil
+}
+
 func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) error {
 	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
 	if len(insertIntoTableInput.ColumnValues) != len(table.ColumnDetails) {
@@ -308,6 +337,45 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 		return err
 	}
 	return db.Put(key, string(valueSchemaBuf))
+}
+
+func (db *DB) selectFromTable(selectFromTableInput sqlparser.SelectFromTable) ([][]string, error) {
+	// what should be the output structure?
+	// array of rows ==> [][]string?
+	// only support primary key based queries for now
+	// we need to know the primary key column
+	tableName := selectFromTableInput.TableName
+	schema, ok := db.tableNameVsSchemaMap[selectFromTableInput.TableName]
+	pkPos := schema.PrimaryKeyColumnPosition
+	pkColumnName := ""
+	if !ok {
+		return nil, fmt.Errorf("table with name %q not found", tableName)
+	}
+	// improve performance by storing primary key column name also?
+	for i, col := range schema.ColumnDetails {
+		if i == pkPos {
+			pkColumnName = col.ColumnName
+		}
+	}
+	if pkColumnName == "" {
+		// throw error?
+		return nil, errors.New("primary key column position is incorrect")
+	}
+	// only pointed primary key query supported
+	if len(selectFromTableInput.QueryConditions) == 1 && selectFromTableInput.QueryConditions[0].ColumnName == pkColumnName &&
+		selectFromTableInput.QueryConditions[0].QueryType == sqlparser.Equals {
+		key := fmt.Sprintf("%s:%s", tableName, selectFromTableInput.QueryConditions[0].Value)
+		value, err := db.Get(key)
+		if err != nil {
+			return nil, err
+		}
+		rowValues, err := db.deserializeRowValues(tableName, value)
+		if err != nil {
+			return nil, err
+		}
+		return [][]string{rowValues}, nil
+	}
+	return nil, errors.New("query not supported")
 }
 
 func (db *DB) ShowTables() []string {
