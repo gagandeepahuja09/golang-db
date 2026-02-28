@@ -159,6 +159,36 @@ func TestParseSelectFromTable(t *testing.T) {
 			expectedError:           "syntax error: expected IDENTIFIER \"\", got SYMBOL \";\"",
 		},
 		{
+			name:                    "Select with column name",
+			inputQuery:              "SELECT c1;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select column name and WHERE",
+			inputQuery:              "SELECT c1 WHERE;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got KEYWORD \"WHERE\"",
+		},
+		{
+			name:                    "select column name and from",
+			inputQuery:              "SELECT c1 FROM;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select 11 columns",
+			inputQuery:              "SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11 FROM table1;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "maximum 10 columns supported in SELECT query",
+		},
+		{
+			name:                    "No Column selected",
+			inputQuery:              "SELECT FROM table1;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "expected atleast 1 column in SELECT query",
+		},
+		{
 			name:       "Select correct query without WHERE clause",
 			inputQuery: "SELECT * FROM students;",
 			expectedSelectFromTable: SelectFromTable{
@@ -167,6 +197,30 @@ func TestParseSelectFromTable(t *testing.T) {
 				QueryConditions: nil,
 			},
 			expectedError: "",
+		},
+		{
+			name:                    "Select query AND before WHERE",
+			inputQuery:              "SELECT * FROM students AND;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected SYMBOL \";\", got KEYWORD \"AND\"",
+		},
+		{
+			name:                    "Select with WHERE clause but no condition",
+			inputQuery:              "SELECT * FROM students WHERE;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "expected atleast 1 condition within WHERE clause of SELECT query",
+		},
+		{
+			name:                    "Select with WHERE clause but condition only having column name",
+			inputQuery:              "SELECT * FROM students WHERE name;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"query condition\", got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select with WHERE clause but condition not having column value",
+			inputQuery:              "SELECT * FROM students WHERE name =;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"query value\", got SYMBOL \";\"",
 		},
 	}
 
