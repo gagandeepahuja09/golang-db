@@ -122,7 +122,7 @@ func TestParseInsertIntoTable(t *testing.T) {
 			expectedError:           "syntax error: expected KEYWORD \"VALUES\", got SYMBOL \"(\"",
 		},
 		{
-			name:       "Insert but with no column values",
+			name:       "Insert with column values",
 			inputQuery: "INSERT INTO payments VALUES (1234, age, 0)",
 			expectedInsertIntoTable: InsertIntoTable{
 				TableName:    "payments",
@@ -140,6 +140,146 @@ func TestParseInsertIntoTable(t *testing.T) {
 				assert.Equal(t, tt.expectedError, err.Error())
 			} else {
 				assert.Equal(t, tt.expectedInsertIntoTable, *input)
+			}
+		})
+	}
+}
+
+func TestParseSelectFromTable(t *testing.T) {
+	testCases := []struct {
+		name                    string
+		inputQuery              string
+		expectedSelectFromTable SelectFromTable
+		expectedError           string
+	}{
+		{
+			name:                    "Only select",
+			inputQuery:              "SELECT;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select with column name",
+			inputQuery:              "SELECT c1;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select column name and WHERE",
+			inputQuery:              "SELECT c1 WHERE;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got KEYWORD \"WHERE\"",
+		},
+		{
+			name:                    "select column name and from",
+			inputQuery:              "SELECT c1 FROM;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"\", got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select 11 columns",
+			inputQuery:              "SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11 FROM table1;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "maximum 10 columns supported in SELECT query",
+		},
+		{
+			name:       "Select 10 columns",
+			inputQuery: "SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 FROM table1;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "table1",
+				ColumnsRequired: []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10"},
+			},
+			expectedError: "maximum 10 columns supported in SELECT query",
+		},
+		{
+			name:                    "No Column selected",
+			inputQuery:              "SELECT FROM table1;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "expected atleast 1 column in SELECT query",
+		},
+		{
+			name:       "Select correct query without WHERE clause",
+			inputQuery: "SELECT * FROM students;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "students",
+				ColumnsRequired: []string{"*"},
+				QueryConditions: nil,
+			},
+			expectedError: "",
+		},
+		{
+			name:                    "Select query AND before WHERE",
+			inputQuery:              "SELECT * FROM students AND;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected SYMBOL \";\", got KEYWORD \"AND\"",
+		},
+		{
+			name:                    "Select with WHERE clause but no condition",
+			inputQuery:              "SELECT * FROM students WHERE;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "expected atleast 1 condition within WHERE clause of SELECT query",
+		},
+		{
+			name:                    "Select with WHERE clause but condition only having column name",
+			inputQuery:              "SELECT * FROM students WHERE name;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected CONDITIONAL_OPERATOR, got SYMBOL \";\"",
+		},
+		{
+			name:                    "Select with WHERE clause but condition not having expected column conditional operator",
+			inputQuery:              "SELECT * FROM students WHERE name IS;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected CONDITIONAL_OPERATOR, got IDENTIFIER \"IS\"",
+		},
+		{
+			name:                    "Select with WHERE clause but condition not having column value",
+			inputQuery:              "SELECT * FROM students WHERE name =;",
+			expectedSelectFromTable: SelectFromTable{},
+			expectedError:           "syntax error: expected IDENTIFIER \"query value\", got SYMBOL \";\"",
+		},
+		{
+			// todo: we need to support multi-word string like: WHERE name = 'Gagandeep Singh Ahuja'
+			name:       "Select with WHERE clause and complete condition",
+			inputQuery: "SELECT * FROM students WHERE name = Gagan;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "students",
+				ColumnsRequired: []string{"*"},
+				QueryConditions: []QueryCondition{{
+					ColumnName: "name",
+					Value:      "Gagan",
+					QueryType:  "=",
+				},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name:       "Select with WHERE clause and complete condition",
+			inputQuery: "SELECT * FROM students WHERE name == Gagan;",
+			expectedSelectFromTable: SelectFromTable{
+				TableName:       "students",
+				ColumnsRequired: []string{"*"},
+				QueryConditions: []QueryCondition{{
+					ColumnName: "name",
+					Value:      "Gagan",
+					// todo: this should not be supported
+					QueryType: "==",
+				},
+				},
+			},
+			expectedError: "",
+		},
+		// todo: tests for AND condition
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.inputQuery)
+			input, err := parser.ParseSelectFromTable()
+			if err != nil {
+				assert.Equal(t, tt.expectedError, err.Error())
+			} else {
+				assert.Equal(t, tt.expectedSelectFromTable, *input)
 			}
 		})
 	}

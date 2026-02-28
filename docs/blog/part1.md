@@ -3,6 +3,7 @@
 - There are great books like DDIA and Database internals to understand those in greater detail. YouTube content creators like Hussein Nasser, Arpit Bhayani and Kaivalya Apte have also played a part in sparking that curosity around how to go in depth to understand these systems.
 - As Arpit Bhayani says quite a lot, you learn the most when you are hands-on.
 - If you go through this line from Richard Feynman multiple times, you will see that this still applies even in the LLM world: "What I cannot create, I do not understand."
+- Learning is a slow and time consuming process and the best learnings happen when you don't set any deadlines.
 
 ## Learning Strategy
 - I took an approach of AI assisted learning and not AI assisted development. CLAUDE.md takes care of ensuring that it is not spoon feeding me the implementation and just giving the required hints to solve a particular problem.

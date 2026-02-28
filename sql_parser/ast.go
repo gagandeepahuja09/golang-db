@@ -12,6 +12,30 @@ type InsertIntoTable struct {
 	// as []string and while storing in disk, they will be serialised to consume space as per the data type.
 }
 
+type QueryType string
+
+const (
+	Equals = "="
+	Lt     = "<"
+	Lte    = "<="
+	Gte    = ">="
+	Gt     = ">"
+)
+
+// support for GROUP BY, HAVING, etc will be added progressively. focus as of now is on simple
+// WHERE conditions and AND clause
+type QueryCondition struct {
+	ColumnName string
+	QueryType  QueryType
+	Value      string
+}
+
+type SelectFromTable struct {
+	TableName       string
+	ColumnsRequired []string
+	QueryConditions []QueryCondition
+}
+
 type DataType uint8
 
 const (
