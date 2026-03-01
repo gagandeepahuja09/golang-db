@@ -1,7 +1,6 @@
 package db
 
 import (
-	"fmt"
 	"testing"
 
 	sqlparser "github.com/golang-db/sql_parser"
@@ -16,7 +15,9 @@ func TestInsertSelectTest(t *testing.T) {
 	err = db.CreateTable("CREATE TABLE student (age INT, id STRING, isActive BOOL, PRIMARY KEY (id));")
 	assert.NoError(t, err)
 
-	err = db.InsertIntoTable("INSERT INTO student VALUES (id1234, 15, 1)")
+	err = db.InsertIntoTable("INSERT INTO student VALUES (15, id1234, 1)")
+
+	// todo: tests and code handling cases where data is wrongly provided. eg string provided for INT.
 	assert.NoError(t, err)
 
 	res, err := db.selectFromTable(sqlparser.SelectFromTable{
@@ -29,5 +30,7 @@ func TestInsertSelectTest(t *testing.T) {
 		}},
 	})
 	assert.NoError(t, err)
-	fmt.Printf("res11111: %+v\n", res)
+	assert.Len(t, res, 1)
+
+	assert.Equal(t, []string{"15", "id1234", "1"}, res[0])
 }

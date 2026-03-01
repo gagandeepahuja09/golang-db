@@ -63,7 +63,6 @@ func NewDB(config Config) (*DB, error) {
 	}
 
 	db.tableNameVsSchemaMap, err = db.getTableNameVsSchemaMap()
-	fmt.Printf("db.tableNameVsSchemaMap7777: %v\n", db.tableNameVsSchemaMap)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +231,6 @@ func (db *DB) Begin() (*Transaction, error) {
 func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
 	// todo: checking for table name already exists
 	// todo: since we are doing 2 different Put operations, createTable is not actually atomic
-	fmt.Printf("db.tableNameVsSchemaMap5555: %+v\n", db.tableNameVsSchemaMap)
 
 	db.tableNameVsSchemaMap[createTableInput.TableName] = createTableInput
 
@@ -296,8 +294,9 @@ func (db *DB) serialiseInsertIntoTableInput(insertIntoTableInput sqlparser.Inser
 				return "", nil, err
 			}
 			if valueInt != 0 && valueInt != 1 {
-				valueSchemaBuf = append(valueSchemaBuf, uint8(valueInt))
+				return "", nil, errors.New("only 0 and 1 values supported for BOOL data type")
 			}
+			valueSchemaBuf = append(valueSchemaBuf, uint8(valueInt))
 		}
 	}
 
@@ -325,7 +324,7 @@ func (db *DB) deserializeRowValues(tableName, value string) ([]string, error) {
 			i += len
 
 		case sqlparser.Bool:
-			val := strconv.FormatBool(valueBuf[i] != 0)
+			val := strconv.FormatUint(uint64(valueBuf[i]), 2)
 			rowValues = append(rowValues, val)
 			i++
 		}
