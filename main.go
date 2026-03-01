@@ -49,7 +49,7 @@ func main() {
 		case "CREATE":
 			if len(args) > 1 && args[1] == "TABLE" {
 				if err := cmdCreateTable(db, line); err != nil {
-					fmt.Println("Error while running CREATE TABLE command: '%s'", err.Error())
+					fmt.Printf("Error while running CREATE TABLE command: '%s'\n", err.Error())
 				} else {
 					fmt.Println("CREATE TABLE performed successfully")
 				}
@@ -65,9 +65,9 @@ func main() {
 		case "SELECT":
 			if len(args) > 1 && args[1] == "TABLE" {
 				if err := cmdSelectFromTable(db, line); err != nil {
-					fmt.Println("Error while running CREATE TABLE command: '%s'", err.Error())
+					fmt.Printf("Error while running SELECT FROM command: '%s'\n", err.Error())
 				} else {
-					fmt.Println("CREATE TABLE performed successfully")
+					fmt.Println("SELECT performed successfully")
 				}
 			} else {
 				fmt.Println(CommandNotSupported)
