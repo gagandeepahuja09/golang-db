@@ -63,6 +63,7 @@ func NewDB(config Config) (*DB, error) {
 	}
 
 	db.tableNameVsSchemaMap, err = db.getTableNameVsSchemaMap()
+	fmt.Printf("db.tableNameVsSchemaMap7777: %v\n", db.tableNameVsSchemaMap)
 	if err != nil {
 		return nil, err
 	}
@@ -79,8 +80,11 @@ func NewDB(config Config) (*DB, error) {
 func (db *DB) getTableNameVsSchemaMap() (map[string]sqlparser.CreateTable, error) {
 	tableNameVsSchemaMap := map[string]sqlparser.CreateTable{}
 	tablesString, err := db.Get(CatalogKey)
-	if err != nil || tablesString == "" {
+	if err != nil {
 		return nil, err
+	}
+	if tablesString == "" {
+		return tableNameVsSchemaMap, nil
 	}
 
 	tableNames := strings.Split(tablesString, ",")
@@ -228,6 +232,8 @@ func (db *DB) Begin() (*Transaction, error) {
 func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
 	// todo: checking for table name already exists
 	// todo: since we are doing 2 different Put operations, createTable is not actually atomic
+	fmt.Printf("db.tableNameVsSchemaMap5555: %+v\n", db.tableNameVsSchemaMap)
+
 	db.tableNameVsSchemaMap[createTableInput.TableName] = createTableInput
 
 	var tableNames string
@@ -308,7 +314,7 @@ func (db *DB) deserializeRowValues(tableName, value string) ([]string, error) {
 	for _, col := range schema.ColumnDetails {
 		switch col.DataType {
 		case sqlparser.Int:
-			val := string(binary.BigEndian.Uint32(valueBuf[i : i+4]))
+			val := strconv.FormatUint(uint64(binary.BigEndian.Uint32(valueBuf[i:i+4])), 10)
 			rowValues = append(rowValues, val)
 			i += 4
 		case sqlparser.String:
@@ -319,7 +325,7 @@ func (db *DB) deserializeRowValues(tableName, value string) ([]string, error) {
 			i += len
 
 		case sqlparser.Bool:
-			val := string(valueBuf[i])
+			val := strconv.FormatBool(valueBuf[i] != 0)
 			rowValues = append(rowValues, val)
 			i++
 		}
@@ -364,6 +370,7 @@ func (db *DB) selectFromTable(selectFromTableInput sqlparser.SelectFromTable) ([
 	// only pointed primary key query supported
 	if len(selectFromTableInput.QueryConditions) == 1 && selectFromTableInput.QueryConditions[0].ColumnName == pkColumnName &&
 		selectFromTableInput.QueryConditions[0].QueryType == sqlparser.Equals {
+		// todo: check for columns required
 		key := fmt.Sprintf("%s:%s", tableName, selectFromTableInput.QueryConditions[0].Value)
 		value, err := db.Get(key)
 		if err != nil {
