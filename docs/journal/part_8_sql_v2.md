@@ -56,8 +56,14 @@
     - Key here also would be `table_name:` and as soon as the prefix changes, we stop reading from the memtable.
 - **Open Questions**:
     - Claude had highlighted in a session that certain databases use merge iterator which makes the time complexity O (N logK). Didn't understand it. Let's discuss if there are more performant ways of doing this.
+- **Todo list:**
+    - Tombstone handling and delete support.
+    - We are building the entire result-set in-memory in map. What if there are billions of rows in a table?
+    - **Merge iterator**: How can this solution improve our performance? Does this provide parallel reads and then merge instead of going sequential?
+    - **Transaction isolation during scan**:
+        - What happens if writes are going in parallel when we are running full-table scan? 
 
-### Prefix approach vs Per-table SS-Table Instance
+### Todo: Prefix approach vs Per-table SS-Table Instance
 - Creating a separate ss-table could be a little bit more performant as we would not be requiring to go through index block and read few unnecessary keys at the boundary.
 - Todo: Pros and cons of both the approaches would be looked at later.
 - Focusing on implementing prefix approach for now as it is more inline with the current architecture.
@@ -72,13 +78,12 @@
     - Example one starting point for estimation could be: no. of rows in the table, and average cardinality for each column. Example: WHERE city = 'NYC'. estimated rows ==> 1k, avg column cardinality ==> 20 (20 distinct cities). estimated value of count of rows returned ==> 1k / 20 ==> 50.
     - Above is just a starting point to understand the concept. The above solution assumes uniform distribution (every city appears equally often).
 - **Role of histogram:** 
-    - A histogram breaks down the value range into buckets. Key --> value range, Value --> row count in that value range or bucket. age --> 
+    - A histogram breaks down the value range into buckets. Key --> value range, Value --> row count in that value range or bucket. age range --> count of rows in that age range.
     - [0 - 20] - 100 rows
     - [21 - 40] - 200 rows
     - [41 - 60] - 150 rows
     - age > 20 ==> sum last 2 buckets.
-    - age >= 18 ==> do some estimations --> last 2 buckets + (2 / 20) of first bucket
-
+    - age >= 18 ==> do some estimations --> last 2 buckets + (2 / 20) of first bucket.
 ## Plan Order
 Suggested order:
   1. Full-table scan (prefix approach) — unblocks everything else

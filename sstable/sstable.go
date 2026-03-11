@@ -20,17 +20,19 @@ const (
 	manifestJsonFileName         = "manifest.json"
 )
 
+// index block entry specifies a single entry in the index block.
 type indexBlockEntry struct {
-	key    string
-	offset int
+	key    string // first key of the data block
+	offset int    // start of the data block
 }
 
 type SsTable struct {
 	mutex              sync.RWMutex
 	dataFilesDirectory string
 	firstLevelFiles    []*os.File
+	indexOffsets       []int // tracks the index block start offsets for each file
 	blockLength        int
-	indexBlocks        [][]indexBlockEntry
+	indexBlocks        [][]indexBlockEntry // stores the index block array for each file.
 	manifest           manifest
 	skipIndex          bool // added only for benchmarking. Default is that index will always be used
 	compacting         bool
@@ -56,6 +58,7 @@ func NewSsTable(config Config) (*SsTable, error) {
 		firstLevelFiles:    make([]*os.File, 0),
 		indexBlocks:        make([][]indexBlockEntry, 0),
 		mutex:              sync.RWMutex{},
+		indexOffsets:       make([]int, 0),
 	}
 
 	directoryMetadata, err := st.getDirectoryMetadata()
@@ -68,7 +71,7 @@ func NewSsTable(config Config) (*SsTable, error) {
 	if st.skipIndex {
 		return &st, err
 	}
-	indexBlocks, err := st.buildIndexes(st.firstLevelFiles)
+	indexBlocks, indexOffsets, err := st.buildIndexes(st.firstLevelFiles)
 	st.indexBlocks = indexBlocks
 	return &st, err
 }
@@ -233,16 +236,21 @@ func (st *SsTable) getDirectoryMetadata() (directoryMetadata *SsTable, err error
 	return directoryMetadata, nil
 }
 
-func (st *SsTable) buildIndexes(files []*os.File) ([][]indexBlockEntry, error) {
+// builds all of the indexes from the ss-table files.
+// returns: array of indexOffsets and array of indexBlock.
+// an indexBlock is denoted by an array of indexBlockEntry.
+func (st *SsTable) buildIndexes(files []*os.File) ([]int, [][]indexBlockEntry, error) {
 	ssTableIndexes := [][]indexBlockEntry{}
+	indexOffsets := []int{}
 	for _, file := range files {
-		ssTableIndex, err := st.buildIndexFromFile(file)
+		indexOffset, ssTableIndex, err := st.buildIndexFromFile(file)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		ssTableIndexes = append(ssTableIndexes, ssTableIndex)
+		indexOffsets = append(indexOffsets, indexOffset)
 	}
-	return ssTableIndexes, nil
+	return indexOffsets, ssTableIndexes, nil
 }
 
 func (st *SsTable) getIndexOffset(file *os.File) (uint32, error) {
@@ -256,24 +264,27 @@ func (st *SsTable) getIndexOffset(file *os.File) (uint32, error) {
 	return binary.BigEndian.Uint32(indexOffsetBuf), nil
 }
 
-func (st *SsTable) buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) {
+// reads the index block from file and populates it in-memory.
+// stores both the index offset and the entire index block in-memory.
+func (st *SsTable) buildIndexFromFile(file *os.File) (int, []indexBlockEntry, error) {
 	// 1. get the index offset
 	info, err := os.Stat(file.Name())
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	fileSize := info.Size()
 	indexOffset, err := st.getIndexOffset(file)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
+	// todo: store index offset in-memory
 
 	// 2. load index in-memory
 	// 2.1 read index byte array
 	indexBlockLength := (fileSize - 4) - int64(indexOffset)
 	indexBlockBuf := make([]byte, indexBlockLength)
 	if _, err = file.ReadAt(indexBlockBuf, int64(indexOffset)); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	// 2.2 read keys and offsets from the index block and create in-memory index
@@ -286,14 +297,14 @@ func (st *SsTable) buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) 
 		// read next keyLength bytes
 		i += 4
 		if i >= int(indexBlockLength) {
-			return nil, errors.New(errWhileReadingIndexBlock + ": " + potentialIndexBlockCorrupted)
+			return 0, nil, errors.New(errWhileReadingIndexBlock + ": " + potentialIndexBlockCorrupted)
 		}
 		key := string(indexBlockBuf[i : i+int(keyLength)])
 
 		// read offset
 		i += int(keyLength)
 		if i >= int(indexBlockLength) {
-			return nil, errors.New(errWhileReadingIndexBlock + ": " + potentialIndexBlockCorrupted)
+			return 0, nil, errors.New(errWhileReadingIndexBlock + ": " + potentialIndexBlockCorrupted)
 		}
 		offsetBuf := indexBlockBuf[i : i+4]
 		offset := binary.BigEndian.Uint32(offsetBuf)
@@ -301,7 +312,7 @@ func (st *SsTable) buildIndexFromFile(file *os.File) ([]indexBlockEntry, error) 
 		ssTableIndex = append(ssTableIndex, indexBlockEntry{key: key, offset: int(offset)})
 		i += 4
 	}
-	return ssTableIndex, nil
+	return int(indexOffset), ssTableIndex, nil
 }
 
 func (st *SsTable) Get(key string) (string, error) {
@@ -334,6 +345,62 @@ func (st *SsTable) Get(key string) (string, error) {
 	return "", nil
 }
 
+// return a map of the full table
+func (st *SsTable) FullTableScan(tableKey string) (map[string]string, error) {
+	st.mutex.RLock()
+	defer st.mutex.RUnlock()
+	tableMap := map[string]string{}
+	// newest file to oldest file
+	for i := len(st.firstLevelFiles) - 1; i >= 0; i-- {
+		file := st.firstLevelFiles[i]
+		ssTableIndex := st.indexBlocks[i]
+		lowerBoundSliceIndex := getLowerBound(tableKey, ssTableIndex)
+		if lowerBoundSliceIndex == -1 {
+			continue
+		}
+		// endOffset would be the start of index block
+		endOffset := st.indexOffsets[i]
+
+		err := st.sequentiallyScanTableAndUpdateMap(file, tableKey,
+			ssTableIndex[lowerBoundSliceIndex].offset, endOffset, tableMap)
+		return nil, err
+	}
+	return tableMap, nil
+}
+
+func (st *SsTable) sequentiallyScanTableAndUpdateMap(ssTableFile *os.File, tableKey string,
+	dataBlockStartOffset, fileEndOffset int, tableMap map[string]string) error {
+	ssTableDataBlockBuf := make([]byte, fileEndOffset-dataBlockStartOffset+1)
+	_, err := ssTableFile.ReadAt(ssTableDataBlockBuf, int64(dataBlockStartOffset))
+	if err != nil && err != io.EOF {
+		return err
+	}
+	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
+	for _, payload := range ssTableDataBlockEntries {
+		// todo: this is a bug for non PUT commands like transaction and DELETE
+		// functionality to be added later.
+		cmds := strings.Split(payload, " ")
+		if len(cmds) != 3 {
+			continue
+		}
+		key := cmds[1]
+		value := cmds[2]
+		if strings.HasPrefix(key, tableKey) {
+			// only set the key value pair if the key is not found
+			// this is because we are sequentially going through the newest file first
+			if _, ok := tableMap[key]; !ok {
+				tableMap[key] = value
+			}
+		} else {
+			keyPrefix := key[0:min(len(tableKey), len(key))]
+			if keyPrefix > tableKey {
+				continue
+			}
+		}
+	}
+	return nil
+}
+
 func (st *SsTable) getValueFromSsTableDataBlock(ssTableFile *os.File, key string, dataBlockStartOffset, dataBlockEndOffset int) (string, error) {
 	ssTableDataBlockBuf := make([]byte, dataBlockEndOffset-dataBlockStartOffset+1)
 	_, err := ssTableFile.ReadAt(ssTableDataBlockBuf, int64(dataBlockStartOffset))
@@ -342,6 +409,8 @@ func (st *SsTable) getValueFromSsTableDataBlock(ssTableFile *os.File, key string
 	}
 	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
 	for _, payload := range ssTableDataBlockEntries {
+		// todo: this is a bug for non PUT commands like transaction and DELETE
+		// functionality to be added later.
 		cmds := strings.Split(payload, " ")
 		if len(cmds) < 2 {
 			continue

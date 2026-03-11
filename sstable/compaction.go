@@ -125,6 +125,7 @@ func (st *SsTable) atomicSwap(compactedFile *os.File, oldFiles []*os.File, compa
 		if !oldFilesMap[file.Name()] {
 			swappedFiles = append(swappedFiles, file)
 			swappedIndexBlocks = append(swappedIndexBlocks, st.indexBlocks[i])
+			// todo: update indexOffset also
 			fileNames = append(fileNames, file.Name())
 		}
 	}
