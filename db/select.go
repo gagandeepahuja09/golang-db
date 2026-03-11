@@ -92,7 +92,28 @@ func (db *DB) fullTableScan(tableName string) ([][]string, error) {
 		return nil, err
 	}
 
+	scanOutput := [][]string{}
+	for _, value := range memTableMap {
+		values, err := db.deserializeRowValues(tableName, value)
+		if err != nil {
+			return nil, err
+		}
+		scanOutput = append(scanOutput, values)
+	}
+
+	for key, value := range ssTableMap {
+		if _, ok := memTableMap[key]; ok {
+			// memtable would have the most up-to date value. no need to rely on sstable value when key is found in memtable
+			continue
+		}
+		values, err := db.deserializeRowValues(tableName, value)
+		if err != nil {
+			return nil, err
+		}
+		scanOutput = append(scanOutput, values)
+	}
+
 	fmt.Printf("memTableMap111: %+v\n", memTableMap)
 	fmt.Printf("ssTableMap111: %+v\n", ssTableMap)
-	return nil, nil
+	return scanOutput, nil
 }

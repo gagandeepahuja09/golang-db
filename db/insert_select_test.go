@@ -55,23 +55,28 @@ func TestSelectFullTableScan(t *testing.T) {
 	// insert few rows in student table
 	for i := 0; i < 50; i++ {
 		err = db.InsertIntoTable(fmt.Sprintf("INSERT INTO student VALUES (%d, id%d, 1)", i, i))
+		assert.NoError(t, err)
 	}
 
 	for i := 75; i < 120; i++ {
 		err = db.InsertIntoTable(fmt.Sprintf("INSERT INTO teacher VALUES (%d, id%d, 1)", i, i))
+		assert.NoError(t, err)
 	}
 
 	val, ok := db.memTable.Get("student:id0")
 	fmt.Printf("val111: %v %v\n", val, ok)
 
-	_, err = db.selectFromTable(sqlparser.SelectFromTable{
+	studentTableScan, err := db.selectFromTable(sqlparser.SelectFromTable{
 		TableName:       "student",
 		ColumnsRequired: []string{"*"},
 	})
 
-	_, err = db.selectFromTable(sqlparser.SelectFromTable{
+	fmt.Printf("studentTableScan: %+v\n", studentTableScan)
+
+	teacherTableScan, err := db.selectFromTable(sqlparser.SelectFromTable{
 		TableName:       "teacher",
 		ColumnsRequired: []string{"*"},
 	})
+	fmt.Printf("teacherTableScan: %+v\n", teacherTableScan)
 	assert.NoError(t, err)
 }

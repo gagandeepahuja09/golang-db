@@ -176,7 +176,7 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 			})
 
 			// write this data block to the file
-			// todo: change data block entry to [length][payload][checksum]xx
+			// todo: change data block entry to [length][payload][checksum]
 			// instead of "PUT key value\n"
 			if _, err = file.Write([]byte(ssTableBlock)); err != nil {
 				// todo: add some break statement
@@ -356,8 +356,14 @@ func (st *SsTable) FullTableScan(tableKey string) (map[string]string, error) {
 		file := st.firstLevelFiles[i]
 		ssTableIndex := st.indexBlocks[i]
 		lowerBoundSliceIndex := getLowerBound(tableKey, ssTableIndex)
+		// means that even the first key prefix >= prefix in tableKey
 		if lowerBoundSliceIndex == -1 {
-			continue
+			// if prefix doesn't match for the first key, no need to read this file
+			if len(ssTableIndex) == 0 || !strings.HasPrefix(ssTableIndex[0].key, tableKey) {
+				continue
+			}
+			// if prefix matches, we need to read the entire file till we encounter a different prefix
+			lowerBoundSliceIndex = 0
 		}
 		// endOffset would be the start of index block
 		endOffset := st.indexOffsets[i]
