@@ -71,8 +71,9 @@ func NewSsTable(config Config) (*SsTable, error) {
 	if st.skipIndex {
 		return &st, err
 	}
-	indexBlocks, indexOffsets, err := st.buildIndexes(st.firstLevelFiles)
+	indexOffsets, indexBlocks, err := st.buildIndexes(st.firstLevelFiles)
 	st.indexBlocks = indexBlocks
+	st.indexOffsets = indexOffsets
 	return &st, err
 }
 
@@ -93,9 +94,9 @@ func (st *SsTable) NewFile() (*os.File, error) {
 // of SSTable file which is [data-block(s)][index-block][footer].
 // It calls the iteratorFunc function to get a stream of key, value pairs from a source.
 // example: 1. MemTable OR 2. firstLevelFiles which need to be merged and compacted.
-// It also updates the internal structs for firstLevelFiles and indexBlocks
+// It also updates the internal structs for firstLevelFiles, indexBlocks, manifest files and indexOffsets
 func (st *SsTable) Write(file *os.File, iteratorFunc func(fn func(key, value string))) error {
-	indexBlock, err := st.writeToFile(file, iteratorFunc)
+	indexOffset, indexBlock, err := st.writeToFile(file, iteratorFunc)
 	if err != nil {
 		return err
 	}
@@ -106,6 +107,7 @@ func (st *SsTable) Write(file *os.File, iteratorFunc func(fn func(key, value str
 		st.indexBlocks = append(st.indexBlocks, indexBlock)
 	}
 	st.manifest.FileNames = append(st.manifest.FileNames, file.Name())
+	st.indexOffsets = append(st.indexOffsets, indexOffset)
 
 	st.saveManifest()
 	st.mutex.Unlock()
@@ -117,20 +119,21 @@ func (st *SsTable) Write(file *os.File, iteratorFunc func(fn func(key, value str
 // of SSTable file which is [data-block(s)][index-block][footer].
 // It calls the iteratorFunc function to get a stream of key, value pairs from a source.
 // example: 1. MemTable OR 2. firstLevelFiles which need to be merged and compacted.
-func (st *SsTable) writeToFile(file *os.File, iteratorFunc func(fn func(key, value string))) ([]indexBlockEntry, error) {
+// returns the index block and indexOffset after writing to file.
+func (st *SsTable) writeToFile(file *os.File, iteratorFunc func(fn func(key, value string))) (int, []indexBlockEntry, error) {
 	indexOffset, indexBlock, err := st.writeDataBlocks(file, iteratorFunc)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if !st.skipIndex {
 		if err = st.writeIndexBlock(file, indexBlock); err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		if err = st.writeFooter(file, indexOffset); err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 	}
-	return indexBlock, err
+	return indexOffset, indexBlock, err
 }
 
 func (st *SsTable) writeFooter(file *os.File, indexBlockStartOffset int) error {
@@ -329,10 +332,8 @@ func (st *SsTable) Get(key string) (string, error) {
 		if lowerBoundSliceIndex == -1 {
 			continue
 		}
-		endOffset := ssTableIndex[lowerBoundSliceIndex].offset + st.blockLength
+		endOffset := st.indexOffsets[i]
 		if lowerBoundSliceIndex < len(ssTableIndex)-1 {
-			// todo: it is safer to have endOffset as start of index offset.
-			// this can potentially lead to issue as more than
 			endOffset = ssTableIndex[lowerBoundSliceIndex+1].offset
 		}
 		value, err := st.getValueFromSsTableDataBlock(file, key,
@@ -361,19 +362,22 @@ func (st *SsTable) FullTableScan(tableKey string) (map[string]string, error) {
 		// endOffset would be the start of index block
 		endOffset := st.indexOffsets[i]
 
-		err := st.sequentiallyScanTableAndUpdateMap(file, tableKey,
+		var err error
+		tableMap, err = st.sequentiallyScanTableAndUpdateMap(file, tableKey,
 			ssTableIndex[lowerBoundSliceIndex].offset, endOffset, tableMap)
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
 	}
 	return tableMap, nil
 }
 
 func (st *SsTable) sequentiallyScanTableAndUpdateMap(ssTableFile *os.File, tableKey string,
-	dataBlockStartOffset, fileEndOffset int, tableMap map[string]string) error {
+	dataBlockStartOffset, fileEndOffset int, tableMap map[string]string) (map[string]string, error) {
 	ssTableDataBlockBuf := make([]byte, fileEndOffset-dataBlockStartOffset+1)
 	_, err := ssTableFile.ReadAt(ssTableDataBlockBuf, int64(dataBlockStartOffset))
 	if err != nil && err != io.EOF {
-		return err
+		return nil, err
 	}
 	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
 	for _, payload := range ssTableDataBlockEntries {
@@ -385,10 +389,13 @@ func (st *SsTable) sequentiallyScanTableAndUpdateMap(ssTableFile *os.File, table
 		}
 		key := cmds[1]
 		value := cmds[2]
+		fmt.Printf("key3333: %+v\n", key)
+		fmt.Printf("value3333: %+v\n", value)
 		if strings.HasPrefix(key, tableKey) {
 			// only set the key value pair if the key is not found
 			// this is because we are sequentially going through the newest file first
-			if _, ok := tableMap[key]; !ok {
+			if _, ok := (tableMap[key]); !ok {
+				fmt.Printf("REACH_22222 %v %v\n", key, value)
 				tableMap[key] = value
 			}
 		} else {
@@ -398,7 +405,7 @@ func (st *SsTable) sequentiallyScanTableAndUpdateMap(ssTableFile *os.File, table
 			}
 		}
 	}
-	return nil
+	return tableMap, nil
 }
 
 func (st *SsTable) getValueFromSsTableDataBlock(ssTableFile *os.File, key string, dataBlockStartOffset, dataBlockEndOffset int) (string, error) {

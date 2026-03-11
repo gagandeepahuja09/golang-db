@@ -84,7 +84,6 @@ func (db *DB) deserializeRowValues(tableName, value string) ([]string, error) {
 }
 
 func (db *DB) fullTableScan(tableName string) ([][]string, error) {
-	// do a prefix scan on memtable
 	key := fmt.Sprintf("%s:", tableName)
 	memTableMap := db.memTable.FullTableScan(key)
 
@@ -93,7 +92,7 @@ func (db *DB) fullTableScan(tableName string) ([][]string, error) {
 		return nil, err
 	}
 
-	fmt.Printf("memTableMap111: %v\n", memTableMap)
-	fmt.Printf("ssTableMap111: %v\n", ssTableMap)
+	fmt.Printf("memTableMap111: %+v\n", memTableMap)
+	fmt.Printf("ssTableMap111: %+v\n", ssTableMap)
 	return nil, nil
 }
