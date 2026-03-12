@@ -15,9 +15,10 @@ const (
 	firstLevelFilesSubdirectory = "l0"
 	defaultBlockLength          = 100
 
-	errWhileReadingIndexBlock    = "error while reading index block"
-	potentialIndexBlockCorrupted = "index block seems incomplete or corrupted"
-	manifestJsonFileName         = "manifest.json"
+	errWhileReadingIndexBlock         = "error while reading index block"
+	potentialIndexBlockCorrupted      = "index block seems incomplete or corrupted"
+	manifestJsonFileName              = "manifest.json"
+	errorWhileReadingSsTableDatablock = "error while reading ss-table data block"
 )
 
 // index block entry specifies a single entry in the index block.
@@ -153,7 +154,7 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 	blockLength := 0
 	blockStartOffset := 0
 	blockFirstKey := ""
-	ssTableBlock := ""
+	ssTableBlockBuf := []byte{}
 	offset := 0
 	indexBlock := []indexBlockEntry{}
 
@@ -163,10 +164,17 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 		if blockFirstKey == "" {
 			blockFirstKey = key
 		}
-		ssTableEntry := fmt.Sprintf("PUT %s %s\n", key, value)
-		offset += len(ssTableEntry)
-		blockLength += len(ssTableEntry)
-		ssTableBlock = ssTableBlock + ssTableEntry
+		// write byte array
+		// todo: checksum to be added later
+		// [length_of_key][key][length_of_value][value]
+		ssTableEntryBuf := []byte{}
+		ssTableEntryBuf = binary.BigEndian.AppendUint32(ssTableEntryBuf, uint32(len(key)))
+		ssTableEntryBuf = append(ssTableEntryBuf, []byte(key)...)
+		ssTableEntryBuf = binary.BigEndian.AppendUint32(ssTableEntryBuf, uint32(len(value)))
+		ssTableEntryBuf = append(ssTableEntryBuf, []byte(value)...)
+		offset += len(ssTableEntryBuf)
+		blockLength += len(ssTableEntryBuf)
+		ssTableBlockBuf = append(ssTableBlockBuf, ssTableEntryBuf...)
 		if blockLength > st.blockLength {
 			// one data block completed
 
@@ -178,7 +186,7 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 			// write this data block to the file
 			// todo: change data block entry to [length][payload][checksum]
 			// instead of "PUT key value\n"
-			if _, err = file.Write([]byte(ssTableBlock)); err != nil {
+			if _, err = file.Write(ssTableBlockBuf); err != nil {
 				// todo: add some break statement
 				// break
 			}
@@ -187,7 +195,7 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 			blockStartOffset = offset
 			blockFirstKey = ""
 			blockLength = 0
-			ssTableBlock = ""
+			ssTableBlockBuf = []byte{}
 		}
 	})
 
@@ -197,7 +205,7 @@ func (st *SsTable) writeDataBlocks(file *os.File, iteratorFunc func(fn func(key,
 			key:    blockFirstKey,
 			offset: blockStartOffset,
 		})
-		_, err = file.Write([]byte(ssTableBlock))
+		_, err = file.Write(ssTableBlockBuf)
 	}
 	return offset, indexBlock, err
 }
@@ -378,23 +386,37 @@ func (st *SsTable) FullTableScan(tableKey string) (map[string]string, error) {
 	return tableMap, nil
 }
 
+func extractValueFromSsTable(ssTableDataBlockBuf []byte, i int) (string, error) {
+	if i+4 > len(ssTableDataBlockBuf) {
+		return "", errors.New(errorWhileReadingSsTableDatablock)
+	}
+	keyLen := binary.BigEndian.Uint32(ssTableDataBlockBuf[i : i+4])
+	i += 4
+	if i+int(keyLen) > len(ssTableDataBlockBuf) {
+		return "", errors.New(errorWhileReadingSsTableDatablock)
+	}
+	return string(ssTableDataBlockBuf[i : i+int(keyLen)]), nil
+}
+
 func (st *SsTable) sequentiallyScanTableAndUpdateMap(ssTableFile *os.File, tableKey string,
 	dataBlockStartOffset, fileEndOffset int, tableMap map[string]string) (map[string]string, error) {
-	ssTableDataBlockBuf := make([]byte, fileEndOffset-dataBlockStartOffset+1)
+	ssTableDataBlockBuf := make([]byte, fileEndOffset-dataBlockStartOffset)
 	_, err := ssTableFile.ReadAt(ssTableDataBlockBuf, int64(dataBlockStartOffset))
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
-	for _, payload := range ssTableDataBlockEntries {
-		// todo: this is a bug for non PUT commands like transaction and DELETE
-		// functionality to be added later.
-		cmds := strings.Split(payload, " ")
-		if len(cmds) != 3 {
-			continue
+	for i := 0; i < len(ssTableDataBlockBuf); {
+		key, err := extractValueFromSsTable(ssTableDataBlockBuf, i)
+		if err != nil {
+			return nil, err
 		}
-		key := cmds[1]
-		value := cmds[2]
+		i += (4 + len(key))
+		value, err := extractValueFromSsTable(ssTableDataBlockBuf, i)
+		if err != nil {
+			return nil, err
+		}
+		i += (4 + len(value))
+
 		fmt.Printf("key3333: %+v\n", key)
 		fmt.Printf("value3333: %+v\n", value)
 		if strings.HasPrefix(key, tableKey) {
@@ -407,7 +429,7 @@ func (st *SsTable) sequentiallyScanTableAndUpdateMap(ssTableFile *os.File, table
 		} else {
 			keyPrefix := key[0:min(len(tableKey), len(key))]
 			if keyPrefix > tableKey {
-				continue
+				return tableMap, nil
 			}
 		}
 	}
@@ -422,8 +444,6 @@ func (st *SsTable) getValueFromSsTableDataBlock(ssTableFile *os.File, key string
 	}
 	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
 	for _, payload := range ssTableDataBlockEntries {
-		// todo: this is a bug for non PUT commands like transaction and DELETE
-		// functionality to be added later.
 		cmds := strings.Split(payload, " ")
 		if len(cmds) < 2 {
 			continue
