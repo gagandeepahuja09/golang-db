@@ -442,14 +442,19 @@ func (st *SsTable) getValueFromSsTableDataBlock(ssTableFile *os.File, key string
 	if err != nil && err != io.EOF {
 		return "", err
 	}
-	ssTableDataBlockEntries := strings.Split(string(ssTableDataBlockBuf), "\n")
-	for _, payload := range ssTableDataBlockEntries {
-		cmds := strings.Split(payload, " ")
-		if len(cmds) < 2 {
-			continue
+	for i := 0; i < len(ssTableDataBlockBuf); {
+		currentKey, err := extractValueFromSsTable(ssTableDataBlockBuf, i)
+		if err != nil {
+			return "", err
 		}
-		if cmds[1] == key {
-			return cmds[2], nil
+		i += (4 + len(currentKey))
+		currentValue, err := extractValueFromSsTable(ssTableDataBlockBuf, i)
+		if err != nil {
+			return "", err
+		}
+		i += (4 + len(currentValue))
+		if currentKey == key {
+			return currentValue, nil
 		}
 	}
 	return "", nil

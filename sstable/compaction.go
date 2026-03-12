@@ -5,7 +5,6 @@ package sstable
 import (
 	"log/slog"
 	"os"
-	"strings"
 )
 
 func (st *SsTable) ShouldRunCompaction() bool {
@@ -28,15 +27,17 @@ func (st *SsTable) buildCompactedMap(files []*os.File) (map[string]string, error
 		if err != nil {
 			return nil, err
 		}
-		entries := strings.Split(string(buf), "\n")
-		for _, payload := range entries {
-			cmds := strings.Split(payload, " ")
-			if len(cmds) < 2 {
-				// todo: this is a hack. needs to be fixed.
-				continue
+		for i := 0; i < len(buf); {
+			key, err := extractValueFromSsTable(buf, i)
+			if err != nil {
+				return nil, err
 			}
-			key := cmds[1]
-			value := cmds[2]
+			i += (4 + len(key))
+			value, err := extractValueFromSsTable(buf, i)
+			if err != nil {
+				return nil, err
+			}
+			i += (4 + len(value))
 			compactedMap[key] = value
 		}
 	}

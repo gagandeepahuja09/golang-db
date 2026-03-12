@@ -70,6 +70,10 @@
     - Compaction isolation is one clear advanatge of per-table ss-table instance.
 - We can optimise later if needed.
 
+### Todo
+- Need to look at failing tests
+- How to efficiently store CHAR(14) and fixed length CHAR? 
+
 ## Query planner
 - Query planner is going to be a very interesting thing to build. Estimate which direction would produce the most efficient result without actually executing the query.
 - There can be multiple access paths to execute a query. 
