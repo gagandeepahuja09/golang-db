@@ -5,7 +5,6 @@ package sstable
 import (
 	"log/slog"
 	"os"
-	"strings"
 )
 
 func (st *SsTable) ShouldRunCompaction() bool {
@@ -28,15 +27,17 @@ func (st *SsTable) buildCompactedMap(files []*os.File) (map[string]string, error
 		if err != nil {
 			return nil, err
 		}
-		entries := strings.Split(string(buf), "\n")
-		for _, payload := range entries {
-			cmds := strings.Split(payload, " ")
-			if len(cmds) < 2 {
-				// todo: this is a hack. needs to be fixed.
-				continue
+		for i := 0; i < len(buf); {
+			key, err := extractValueFromSsTable(buf, i)
+			if err != nil {
+				return nil, err
 			}
-			key := cmds[1]
-			value := cmds[2]
+			i += (4 + len(key))
+			value, err := extractValueFromSsTable(buf, i)
+			if err != nil {
+				return nil, err
+			}
+			i += (4 + len(value))
 			compactedMap[key] = value
 		}
 	}
@@ -82,7 +83,7 @@ func (st *SsTable) RunCompaction() {
 	if err != nil {
 		slog.Error("COMPACTED_FILE_CREATE_FAILED", "error", err.Error())
 	}
-	compactedIndexBlock, err := st.writeToFile(compactedFile, iterator)
+	compactedIndexOffset, compactedIndexBlock, err := st.writeToFile(compactedFile, iterator)
 	if err != nil {
 		slog.Error("COMPACTED_FILE_WRITE_FAILED", "error", err.Error())
 	}
@@ -90,7 +91,7 @@ func (st *SsTable) RunCompaction() {
 	slog.Info("COMPACTED_FILE_WRITE_SUCCESSFUL", "file_name", compactedFile.Name())
 
 	// 6. atomic swap of files array and indexes array
-	st.atomicSwap(compactedFile, filesToCompact, compactedIndexBlock)
+	st.atomicSwap(compactedFile, filesToCompact, compactedIndexBlock, compactedIndexOffset)
 
 	slog.Info("COMPACTED_FILE_ATOMIC_SWAP_SUCCESSFUL", "files_to_compact_count", len(filesToCompact))
 
@@ -101,10 +102,11 @@ func (st *SsTable) RunCompaction() {
 	}
 }
 
-// takes the compacted file, old files array and current state of files array to construct the new
-// ssTables array and sets it.
+// takes the compacted file, old files array and current state of files array to construct the new ssTables array and sets it.
 // similar behaviour done for indexes array.
-func (st *SsTable) atomicSwap(compactedFile *os.File, oldFiles []*os.File, compactedIndexBlock []indexBlockEntry) {
+// the old files / index block / index offset will not be kept after atomic swap as those have now been compacted.
+// while the new files which were not part of compaction will get added.
+func (st *SsTable) atomicSwap(compactedFile *os.File, oldFiles []*os.File, compactedIndexBlock []indexBlockEntry, compactedIndexOffset int) {
 	st.mutex.Lock()
 	defer st.mutex.Unlock()
 
@@ -120,11 +122,13 @@ func (st *SsTable) atomicSwap(compactedFile *os.File, oldFiles []*os.File, compa
 	swappedFiles := []*os.File{compactedFile}
 	fileNames := []string{compactedFile.Name()}
 	swappedIndexBlocks := [][]indexBlockEntry{compactedIndexBlock}
+	swappedIndexOffsets := []int{compactedIndexOffset}
 
 	for i, file := range currentFiles {
 		if !oldFilesMap[file.Name()] {
 			swappedFiles = append(swappedFiles, file)
 			swappedIndexBlocks = append(swappedIndexBlocks, st.indexBlocks[i])
+			swappedIndexOffsets = append(swappedIndexOffsets, st.indexOffsets[i])
 			fileNames = append(fileNames, file.Name())
 		}
 	}
