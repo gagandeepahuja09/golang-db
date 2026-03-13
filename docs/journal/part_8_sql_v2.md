@@ -35,7 +35,7 @@
     - Alternately we can store an additional byte telling whether it is NULL or NOT NULL.
     - If it is null, we don't read the 4 bytes.
 
-## Handling non-primary key based queries (Full-table scans)
+## Handling non-primary key based queries (Full-table scans) [V1 Done]
 - Before building the approach for full-table scan, lets take a step back and revise how the data is structured.
 - Each file is a mem-table snapshot of key-value pairs.
 - When we require doing a full-table scan, we need to go through each file. This is because the same key can be found in multiple files even after compaction and the latest file is the most up-to-date value for the same key.
@@ -74,6 +74,62 @@
 - Need to look at failing tests
 - How to efficiently store CHAR(14) and fixed length CHAR? 
 
+## Secondary Index
+- While storing indexes, we would again utilise the Put command.
+- Index would be updated both during INSERT and UPDATE queries.
+- How do we ensure atomicity?
+- We need to solve for both secondary index and composite indexes.
+- Let's start with a simpler problem first: index on a single column.
+- **How will we store the data?** 
+    - One column value will be associated to multiple rows in the table. Hence this is a one-to-many-mapping.
+    - We can store the data in a way such that the key itself gives us all the relevant data.
+    - Key: `index:<table_name>:<column_name>:<column_value>:pk_value_1`, Value: can be empty.
+    - Example: Index on city column.
+    - index:city:NYC:id_1, index:city:NYC:id_2, index:city:NYC:id_5, ... 
+- **How will we get the data during reads?**
+    - Prefix scan on `index:<table_name>:<column_name>:<column_value>` --> extract all primary keys 
+    - Do a get for each primary key to extract all the relevant 
+    - Question: is this really optimal? Full-table scan instead has mostly sequential scans while this approach might have a lot of random seeks as well due to prefix scan + GET.
+    - As per my understanding, this approach well but in skewed cases where an index value contributes to 50% of more of the rows, this approach would not scale well.
+        - Query planner can maybe choose to not use index in such cases. 
+
+### Inserts And Updates
+- As of now, we have not yet solved for Updates. Updates are similar to delete + insert.
+- We would have to implement delete functionality first by adding some sort of indicators called tombstones that a particular key (or row) is deleted. During compaction, such old entries can be removed.
+- Both during inserts and updates, we would need to update the secondary index by issuing PUT commands.
+- During update, we would need to remove the association with the old row by marking the old one as tombstone. 
+- We would also have to handle for PK value itself getting updated as that is a "key" change itself.
+
+### Index Metadata Storage
+- We also need to store what all indexes are present in a table (both in DB and in-memory). 
+- An `_index:<table_name>` can be added for it.
+- Value can have all comma separated indexes.
+
+### CREATE INDEX and updates in CREATE TABLE
+- In case of CREATE INDEX, we would also need to backfill by running PUT queries in bulk.
+- **Open Questions:**
+    - What about DB updates that are happening during that backfill?
+    - How do we ensure that they don't go stale?
+
+### Do we even need atomicity?
+
+### Todo:
+- We have used : as a delemiter everywhere. We instead would need to move to binary serialisation and deserialisation.
+
+### Composite Indexes
+- The design would extend from secondary index
+- `index:table_name:index_name:col1:col2:col3:col_value1:col_value2:col_value3:pk_id` --> where we would have separate key for all pk satisfying condition WHERE col1 = AND col2 = AND col3 = and all pk_ids satisfying that.
+- Why column ordering matters in composite index?
+- This is based on how the data or key is stored. col1 is used first, hence if a query doesn't have col1 in the query, the secondary index won't be used.  
+- Following queries would work: 
+    1. WHERE col1 = AND col2 = AND col3 = 
+    2. WHERE col1 = AND col2 =
+    3. WHERE col1
+    4. WHERE col1 = AND col3 = (only use index for col1 and then filter for col3 during scan)
+- But not following:
+    1. WHERE col2 = 
+    2. WHERE col3 = 
+
 ## Query planner
 - Query planner is going to be a very interesting thing to build. Estimate which direction would produce the most efficient result without actually executing the query.
 - There can be multiple access paths to execute a query. 
@@ -88,6 +144,7 @@
     - [41 - 60] - 150 rows
     - age > 20 ==> sum last 2 buckets.
     - age >= 18 ==> do some estimations --> last 2 buckets + (2 / 20) of first bucket.
+
 ## Plan Order
 Suggested order:
   1. Full-table scan (prefix approach) — unblocks everything else
