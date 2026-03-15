@@ -132,6 +132,8 @@
 
 ## Query planner
 - Query planner is going to be a very interesting thing to build. Estimate which direction would produce the most efficient result without actually executing the query.
+- **Design before query planner**: SQL string --> Parser --> AST --> Execute.
+- **Design after query planner**: SQL string --> Parser --> AST `Planner --> Physical Plan` --> Execute.
 - There can be multiple access paths to execute a query. 
     - How to return how many rows a query would return without actually estimating? Stats: But how does stats solve it?
     - Apart from storing data in tables, we would also be storing table level stats in some table.
@@ -144,12 +146,93 @@
     - [41 - 60] - 150 rows
     - age > 20 ==> sum last 2 buckets.
     - age >= 18 ==> do some estimations --> last 2 buckets + (2 / 20) of first bucket.
+- Let's take a query example: `WHERE col1 = 'abc' AND col2 > 20 AND col3 = 'def' AND col4 = 'ghi'`.
+- Assume we have separate indexes on col1 and col2 and a composite index on col3 and col4.
+- *Should we be taking a direction based on the estimate of no. of rows returned? The index which returns the estimate on least no. of rows should be returned?*
+    - Fewer rows != Cheaper I/O.
+    - Full-table scan: sequential I/O.
+    - Index scan: N random seeks, one GET per PK.  (each seek traverses index block -> data block).
+    - *So, how to estimate when index-scan would be more useful than a full-table scan?*
+- We saw that cost is estimated on the basis of disk I/O but what all are the other factors which we should be aware of and think about apart from estimate of no. of rows?
+
+### Yugabyte DB Article Insights
+- https://www.yugabyte.com/blog/yugabytedb-cost-based-optimizer/#what-is-the-difference-between-cost-based-and-rule-based-optimizer 
+- Rather than calculating the cost of each possible path, they take a dynamic programming based approach.
+- They model the cost using a combination of seeks, nexts and previous.
+- Seek: Operation to lookup a key.
+- Next: Operation to fetch the next key.
+- Prev: Operation to fetch the preceeding key.
+- Does the next and preceeding key mean the keys from the prefix scan?
+- Cost of seek is much higher compared to next and prev. Why?
+    - Seek requires much more file I/O to go through multiple files, then the index block and then the data block.
+- How to calculate the cost of each seek, next and prev?
+
+### Full-table scan vs Index scan
+- **Full-table scan**: B blocks read --> [1 seek + (B - 1) nexts]. 1 seek for the prefix scan on the table_name key
+- **Index only scan**: R rows --> [1 seek + (R - 1) nexts]. 1 seek for the prefix scan on the index key.
+- **Index scan**: [1 seek + (R - 1) nexts + R seeks] (R additional seeks for each row for running GET for each)
+    - (R + 1) seeks + (R - 1) nexts
+- Hence, if we can find a ratio between seek and next (let's call it seek_multiplier = seek / next), we would be able to effectively estimate costs. This ratio is found by carrying out some benchmarking. This ratio is quite hardware dependent as the ratio of random scan latency to sequential scan latency is much higher in case of HDD compared SSDs and NVMe.
+- We can consider next --> as sequential scan and seek --> as random scan.
+
+### Seek-multiplier benchmarking
+- We need to carry out some benchmarking to find out what should be the value of seek-multiplier.
+- **What operation in the system isolates a single random step? [Seek Cost]**
+    - GET key
+- **What operation in the system isolates a single sequential step? [Next Cost]**
+    - Total cost - seek cost / N where N is no. of keys read during sequential scan.  
+
+**Benchmark Plan**
+- **Seek Cost** => Measure N individual GET on random keys (total_time / N)
+    - If we read them sequentially, then the OS read-ahead will pre-fetch blocks and we will accidentally measure sequential I/O.
+        - When we read block 5 sequentially, OS predicts that we will read block 6 next.
+    - In order to ensure random behaviour, keep all the keys in an array and use random number generator of identify a random index to pick the key which we need to GET.
+- **Next Cost** ==> Measure full-table scan. full_scan_time = seek_cost + ((N - 1) * next_cost)
+    - next_cost = (full_scan_time - seek_cost) / (N - 1)
+- **Benchmark Code**
+    - We need to create table and insert N rows first. We will not keep this section in `for b.Loop` so that this is not part of benchmark result.
+    - How will we numerically get the seek cost and next cost as result? Basis what I know, Golang benchmark provides a final output only which is function specific. How to modify for our use case such that next cost and seek cost are directly in the output?
+- **Dataset size**
+    - OS has a page cache. If the dataset fits in memory, every "random seek" is served from RAM leading to seek multiplier ratio closer to 1.
+    - We should also test for varying access patterns: high cache misses, high cache hits and mixed workloads.
+- **Docker container approach**
+    - This approach is necessary and quite useful in setting limitations on RAM. Rather than exhausting the 8 or 16 GB RAM limitation of the system, we will set up a docker container. We can set the memory limitation by setting the --memory flag.
+    - What we can do is: write 60 MB of data.
+        - high cache hits: 64 MB of RAM
+        - high cache misses: 8 or 16 MB of RAM
+        - mixed workloads: 32 MB of RAM
+    - This also shows that the seek multiplier is a factor of RAM as well apart from the hardware. This again proves the importance of seek ratio being a tunable parameter as is the case in Postgres.
+    - Docker container approach also helps with busting the cache in between runs. This is necessary because after a full-table scan, everything is in page cache and hence we are unknowingly measuring cache hits and not disk seeks. 
+        - Run each benchmark in a separate container run. OR
+        - Call `echo 3 > /proc/sys/vm/drop_caches` between benchmarks.
+- **Benchmark data must be in SSTable**
+    - Since the flush default limit is only 1kB, almost all of the data would reside in SSTable for the benchmark. 
+
+### Enumerating all access paths
+
+### Stats storage
+- When should we update the stats related tables? Updating on each and every write would impact disk I/O, reads and writes performance unnecessarily.
+- Updating them during flush to sstable makes the most sense.
+- We can keep maintaining the stats in-memory.
+
+#### Counter Stats
+- Should we be storing the count aggregate for each value? If not, we would have to consider uniform distribution? Can we take some other approach?
+
+#### Histogram Stats
+- Only to be stored for numeric data-types.
+
+### Resources
+- Postgres: https://www.postgresql.org/docs/current/runtime-config-query.html — search for random_page_cost. The official docs explain what each cost parameter means and what values to set for SSDs.                    
+- https://wiki.postgresql.org/wiki/Tuning_Your_PostgreSQL_Server  community wiki with practical guidance on tuning cost parameters including the SSD recommendation.                                       
+- YugabyteDB: https://www.yugabyte.com/blog/yugabytedb-cost-based-optimizer/: read on how they assign weights
+- MySQL: https://dev.mysql.com/doc/refman/8.0/en/cost-model.html — MySQL has an explicit cost model table stored in mysql.server_cost and mysql.engine_cost that you can actually query and modify. Much more transparent than Postgres.
+- CMU Database Course: Andy Pavlo's 15-445 lectures on query planning are freely available at https://15445.cs.cmu.edu. Lecture on "Cost Models" covers this rigorously with actual numbers and derivations.
 
 ## Plan Order
 Suggested order:
-  1. Full-table scan (prefix approach) — unblocks everything else
+  1. Full-table scan (prefix approach) — unblocks everything else [Done]
   2. AND support — straightforward filter composition post-scan
-  3. Secondary indexes — most interesting design challenge, teaches index maintenance on writes
+  3. Secondary indexes — most interesting design challenge, teaches index maintenance on writes [Plan mostly done, Execution pending]
   4. Range-based queries — needs index seek, connects back to storage layer
-  5. Query planner — only becomes meaningful once you have multiple access paths (full scan vs index scan) to choose between
+  5. Query planner — only becomes meaningful once you have multiple access paths (full scan vs index scan) to choose between [Plan WIP]
   6. Unique index, composite indexes, NULL support — refinements
