@@ -167,15 +167,15 @@
     - Seek requires much more file I/O to go through multiple files, then the index block and then the data block.
 - How to calculate the cost of each seek, next and prev?
 
-### Full-table scan vs Index scan
-- **Full-table scan**: B blocks read --> [1 seek + (B - 1) nexts]. 1 seek for the prefix scan on the table_name key
-- **Index only scan**: R rows --> [1 seek + (R - 1) nexts]. 1 seek for the prefix scan on the index key.
-- **Index scan**: [1 seek + (R - 1) nexts + R seeks] (R additional seeks for each row for running GET for each)
-    - (R + 1) seeks + (R - 1) nexts
+### 1. Full-table scan vs Index scan
+- **Full-table scan**: R1 rows read --> [1 seek + (R1 - 1) nexts]. 1 seek for the prefix scan on the table_name key
+- **Index only scan**: R2 rows --> [1 seek + (R2 - 1) nexts]. 1 seek for the prefix scan on the index key.
+- **Index scan**: [1 seek + (R2 - 1) nexts + R2 seeks] (R2 additional seeks for each row for running GET for each)
+    - (R2 + 1) seeks + (R2 - 1) nexts
 - Hence, if we can find a ratio between seek and next (let's call it seek_multiplier = seek / next), we would be able to effectively estimate costs. This ratio is found by carrying out some benchmarking. This ratio is quite hardware dependent as the ratio of random scan latency to sequential scan latency is much higher in case of HDD compared SSDs and NVMe.
 - We can consider next --> as sequential scan and seek --> as random scan.
 
-### Seek-multiplier benchmarking
+### 2. Seek-multiplier benchmarking
 - We need to carry out some benchmarking to find out what should be the value of seek-multiplier.
 - **What operation in the system isolates a single random step? [Seek Cost]**
     - GET key
@@ -192,6 +192,7 @@
 - **Benchmark Code**
     - We need to create table and insert N rows first. We will not keep this section in `for b.Loop` so that this is not part of benchmark result.
     - How will we numerically get the seek cost and next cost as result? Basis what I know, Golang benchmark provides a final output only which is function specific. How to modify for our use case such that next cost and seek cost are directly in the output?
+        - You can also do b.ReportMetric with specific formulae.
 - **Dataset size**
     - OS has a page cache. If the dataset fits in memory, every "random seek" is served from RAM leading to seek multiplier ratio closer to 1.
     - We should also test for varying access patterns: high cache misses, high cache hits and mixed workloads.
@@ -208,18 +209,65 @@
 - **Benchmark data must be in SSTable**
     - Since the flush default limit is only 1kB, almost all of the data would reside in SSTable for the benchmark. 
 
-### Enumerating all access paths
+### 3. Enumerating all access paths
+- Lets take an example `WHERE col1 = abc AND col2 = 123 AND col3 = def AND col4 > 10`
+- Check what all indexes exist. Index 1: col1, Index 2: col2, Index 3: composite index on col3 and col4.
+- **Assumption for v1 and todo for v2**: 
+    - While Postgres and MySQL support using multiple indexes in the same query, we will take that up in V2.
+- `index:col1` --> only get rows which have abc --> we 
+- So, number of paths = no. of indexes + full-table scan path.
+- But there are also cases where we can do index only scans as well. That is what we call as covering indexes. Example in above query, if we only need col3, col4 and primary key, then composite index is sufficient.
+- So, after enumerating paths, calculate the cost of each. Calculate cost by using formula used in heading 1: Full-table scan vs Index scan.
+    - Based on benchmarking done in heading 2: Seek-multiplier benchmarking. Let's assume that the seek_multiplier = 4. Then, we will consider next = 1, seek = 4 in formula in heading 1.
+    - Example: index scan becomes: ((R2 + 1) * 4) + ((R2 - 1) * 1) = 5 * R2 + 3
+    - index only: R2 + 3
+    - full-table: R1 + 3
+    - So, if R2 < R1 / 5 --> we can use index scan and index only scan is always a yes if that is sufficient. 
 
-### Stats storage
+#### 3.1 Index selection logic
+- Check all the WHERE conditions. For each column check what are the 
+
+### 4. Stats storage
 - When should we update the stats related tables? Updating on each and every write would impact disk I/O, reads and writes performance unnecessarily.
 - Updating them during flush to sstable makes the most sense.
 - We can keep maintaining the stats in-memory.
+- We can have the entire stats of a table in a single key for now. `stats:<table_name>` If a use case emerges, where we should break it down into separate keys will do that.
+- Key metrics to be stored would depend on whether the data type is numeric or string.
+- For string data type:
+    - Range query support for string data type is not so important (though there can be cases of id > 'id123' where id is time sorted string). We can add that later.
+    - The more important thing for string data type is "=" based queries. 
+    - Storing and maintaining the count of each value to how many times it occurs is very expensive.
+    - Hence the easier thing becomes: 
+        1. Calculate the num_unique_values (cardinality) 
+        2. We would have the number of rows with us in a table.
+    - So, to get estimate on no. of rows satisfying a WHERE condition, we would use: num_row / num_unique_values --> avg. no. of rows for each.
+    - *How would we come to know of the no. of rows and no. of unique values?*
+        - We can keep on maintaining data structures for that. Row count --> integer (incremented during INSERT) and map[key --> unique_value]bool --> would give num_unique_values. These data structures would also be flushed to ss-table.
+        - We would have do this during each INSERT and UPDATE query.
+        - We would also have to handle the buildMemtableFromWal function. We should populate these data structures also within this.
+    - But this average value doesn't suffice for skewed data. We can also stored MCV (most common values). As maintaining the count for each unique value would consume more memory. 
+        - But we can still maintain unique values for cases where the frequency.
+        - *How many top K values should we store MCV for?* Let's keep it till 100
+        - This approach still suffers for cases where we are searching for key which is not much frequent.  
+- For numeric data type:
+    - 
+
 
 #### Counter Stats
 - Should we be storing the count aggregate for each value? If not, we would have to consider uniform distribution? Can we take some other approach?
 
 #### Histogram Stats
 - Only to be stored for numeric data-types.
+
+### Benchmarking on Query planner performance
+- The entire purpose of query planner is to ensure that we are taking the least expensive path and hence having the best performance. We need a solid plan on how to test that out and validate that we are doing things correctly and maybe figure out how we can improve the system.
+
+### Steps in building a query planner
+1. Come up with a seek-multiplier factor after benchmarking.
+2. Enumerate all possible access paths.
+3. For each path, calculate the cost.
+4. After calculating cost, prepare a plan. A plan would be some array object tell the sequence like:
+    { [index:col2], [filtering] }
 
 ### Resources
 - Postgres: https://www.postgresql.org/docs/current/runtime-config-query.html — search for random_page_cost. The official docs explain what each cost parameter means and what values to set for SSDs.                    
