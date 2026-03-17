@@ -77,7 +77,10 @@
 ## Secondary Index
 - While storing indexes, we would again utilise the Put command.
 - Index would be updated both during INSERT and UPDATE queries.
-- How do we ensure atomicity?
+- **How do we ensure atomicity?**
+    - Atomicity is required such that both index addition and row addition or update are done together.
+    - We don't require doing any additional changes for this. This is because the keys would be added when memtable is flushed to ss-table.
+    - If the keys are not added, they are still written to WAL. buildMemtableFromWal should also take care of updating the internal data structures which are for table secondary / composite indexes.
 - We need to solve for both secondary index and composite indexes.
 - Let's start with a simpler problem first: index on a single column.
 - **How will we store the data?** 
@@ -91,14 +94,15 @@
     - Do a get for each primary key to extract all the relevant 
     - Question: is this really optimal? Full-table scan instead has mostly sequential scans while this approach might have a lot of random seeks as well due to prefix scan + GET.
     - As per my understanding, this approach well but in skewed cases where an index value contributes to 50% of more of the rows, this approach would not scale well.
-        - Query planner can maybe choose to not use index in such cases. 
+        - Query planner can maybe choose to not use index in such cases. Query planner section covers these things in detail which will be solved after adding secondary index.
 
-### Inserts And Updates
+### Inserts [v1] And Updates [v2]
 - As of now, we have not yet solved for Updates. Updates are similar to delete + insert.
 - We would have to implement delete functionality first by adding some sort of indicators called tombstones that a particular key (or row) is deleted. During compaction, such old entries can be removed.
 - Both during inserts and updates, we would need to update the secondary index by issuing PUT commands.
 - During update, we would need to remove the association with the old row by marking the old one as tombstone. 
 - We would also have to handle for PK value itself getting updated as that is a "key" change itself.
+- **Note:**: We have not solved and detailed the solution yet for updates, deletes and tombstones. Will be taken up subsequently. 
 
 ### Index Metadata Storage
 - We also need to store what all indexes are present in a table (both in DB and in-memory). 
@@ -107,14 +111,21 @@
 
 ### CREATE INDEX and updates in CREATE TABLE
 - In case of CREATE INDEX, we would also need to backfill by running PUT queries in bulk.
-- **Open Questions:**
-    - What about DB updates that are happening during that backfill?
-    - How do we ensure that they don't go stale?
-
-### Do we even need atomicity?
+- **What about DB updates that are happening during that backfill? How do we ensure that they don't go stale?**
+    - Create index queries should generally be run during low traffic time. But the bigger concern is whether we should lock the rows for the entire duration during which the index is getting updated.
+    - Issues will only arise if the specific column values or primary key are getting updated.
+    - Another issue could be newly added rows which got missed during the time which the index was being created.
+    - So we need to solve for all: creates / updates / deletes during the backfill.
+- **Option 1: Simpler**
+    - Lock the table for writes during index creation.
+- **Option 2: CREATE TABLE CONCURRENTLY**
+    - Detailed solution to be thought and built later.
+    - Postgres has this feature.
+    - **Core insight**: We can set some building flag for the index. Hence all in-flight write requests would also update the relevant index which is being created. We might also run into challenges with this appraoch. Details to be added later.
+- Will go ahead with option 1 for now and move to option 2 shortly.
 
 ### Todo:
-- We have used : as a delemiter everywhere. We instead would need to move to binary serialisation and deserialisation.
+- We have used : as a delemiter everywhere. We instead would need to move to binary serialisation and deserialisation there. Will take that up later.
 
 ### Composite Indexes
 - The design would extend from secondary index
@@ -129,6 +140,18 @@
 - But not following:
     1. WHERE col2 = 
     2. WHERE col3 = 
+
+### Implementation Steps V1:
+1. Add support for specifying index in CREATE TABLE and also add support for CREATE INDEX.
+    - Add support for composite index also. (d)
+    - Change in functions and structs (d)
+    - Change in parser (todo)
+    - UTs (todo)
+2. Update logic in insert to also write to indexes.
+    - Logic
+    - UTs
+3. Update in buildMemtableFromWal (todo)
+4. Update logic in select to check if index exists. (only support one WHERE clause for now)
 
 ## Query planner
 - Query planner is going to be a very interesting thing to build. Estimate which direction would produce the most efficient result without actually executing the query.
@@ -284,3 +307,6 @@ Suggested order:
   4. Range-based queries — needs index seek, connects back to storage layer
   5. Query planner — only becomes meaningful once you have multiple access paths (full scan vs index scan) to choose between [Plan WIP]
   6. Unique index, composite indexes, NULL support — refinements
+
+Todo:
+1. Build a BinaryWriter and BinaryReader which simplifies duplicate code around things like: i) always writing length before writing string. ii) checking error once at end instead of checking after every read.
