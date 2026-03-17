@@ -86,7 +86,7 @@
 - **How will we store the data?** 
     - One column value will be associated to multiple rows in the table. Hence this is a one-to-many-mapping.
     - We can store the data in a way such that the key itself gives us all the relevant data.
-    - Key: `index:<table_name>:<column_name>:<column_value>:pk_value_1`, Value: can be empty.
+    - Key: `index:<table_name>:<index_name>:<column_name>:<column_value>:pk_value_1`, Value: can be empty.
     - Example: Index on city column.
     - index:city:NYC:id_1, index:city:NYC:id_2, index:city:NYC:id_5, ... 
 - **How will we get the data during reads?**
@@ -147,11 +147,17 @@
     - Change in functions and structs (d)
     - Change in parser (todo)
     - UTs (todo)
+    - Make it atomic (todo)
+    - Create Index (todo for next PR)
 2. Update logic in insert to also write to indexes.
-    - Logic
+    - Logic (wip)
+    - Make it atomic (todo)
     - UTs
-3. Update in buildMemtableFromWal (todo)
+3. Update in buildMemtableFromWal (not needed: we will need to make operations atomic instead)
+    - Update startup logic to set the secondary indexes in db.TableNameVsSchemaMap (todo)
 4. Update logic in select to check if index exists. (only support one WHERE clause for now)
+
+#### Milestone 1: Test for create table changes for index. Validate that after application startup, 
 
 ## Query planner
 - Query planner is going to be a very interesting thing to build. Estimate which direction would produce the most efficient result without actually executing the query.

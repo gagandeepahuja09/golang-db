@@ -45,7 +45,7 @@ func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
 	if err != nil {
 		return err
 	}
-	db.Put(fmt.Sprintf(SecondaryIndexesCatalogKey, tableName), string(secondaryIndexCatalogBuf))
+	db.Put(fmt.Sprintf(SecondaryIndexesCatalogKeyTemplate, tableName), string(secondaryIndexCatalogBuf))
 
 	return nil
 }
