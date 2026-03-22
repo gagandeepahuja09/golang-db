@@ -56,7 +56,6 @@ func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
 // during creation, we don't need to do any GET to check the status of the secondary indexes key
 // as no index exists before CREATE TABLE.
 // but during CREATE INDEX, we need to do GET first.
-// todo: helper function for serialise string (with length) and int array (with length)
 func (db *DB) serialiseSecondaryIndexCatalog(tableName string, secondaryIndexes []sqlparser.SecondaryIndex) ([]byte, error) {
 	serialisedSchema := []byte{}
 
@@ -80,13 +79,66 @@ func (db *DB) serialiseSecondaryIndexCatalog(tableName string, secondaryIndexes 
 				}
 			}
 			if colIdx == -1 {
-				return nil, fmt.Errorf("column: %w not found", col)
+				return nil, fmt.Errorf("column: '%s' not found", col)
 			}
 			// 4.1. append column index (position) for the the current column in the column secondary index.
 			serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(colIdx))
 		}
 	}
 	return serialisedSchema, nil
+}
+
+// deserialise: [number_of_indexes][idx_1_name_len][idx_1_name]
+// [number_of_columns_in_idx_1][col_1_idx_1][col2_idx_2]...
+func (db *DB) deserialiseSecondaryIndexCatalog(tableName string, buf []byte, tableColumns []sqlparser.Column) ([]sqlparser.SecondaryIndex, error) {
+	i := 0
+	// 1. read number of indexes
+	if i+4 > len(buf) {
+		return nil, errors.New("unexpected error while reading number of indexes")
+	}
+	secondaryIndexes := []sqlparser.SecondaryIndex{}
+	numIndexes := binary.BigEndian.Uint32(buf[i : i+4])
+	i += 4
+	for j := 0; j < int(numIndexes); j++ {
+		// 2. read index name length for each index
+		if i+4 > len(buf) {
+			return nil, errors.New("unexpected error while reading index name length")
+		}
+		indexNameLen := binary.BigEndian.Uint32(buf[i : i+4])
+		i += 4
+		// 3. read index name for each index
+		if i+int(indexNameLen) > len(buf) {
+			return nil, errors.New("unexpected error while reading index name")
+		}
+		indexName := string(buf[i : i+int(indexNameLen)])
+		i += int(indexNameLen)
+		// 4. read number of columns for each index
+		if i+4 > len(buf) {
+			return nil, errors.New("unexpected error while reading number of columns in index")
+		}
+		columns := []string{}
+		numColumns := binary.BigEndian.Uint32(buf[i : i+4])
+		i += 4
+		// 5. read column position for each column for each index
+		for k := 0; k < int(numColumns); k++ {
+			if i+4 > len(buf) {
+				return nil, errors.New("unexpected error while reading column index position")
+			}
+			colPosition := int(binary.BigEndian.Uint32(buf[i : i+4]))
+			i += 4
+			// 6. get the column name as per column position
+			if colPosition < 0 || colPosition >= len(tableColumns) {
+				// col position must be within 0 and 0. Got -1
+				return nil, fmt.Errorf("col position must be within 0 and %d. Got %d", len(tableColumns)-1, colPosition)
+			}
+			columns = append(columns, tableColumns[colPosition].ColumnName)
+		}
+		secondaryIndexes = append(secondaryIndexes, sqlparser.SecondaryIndex{
+			IndexName: indexName,
+			Columns:   columns,
+		})
+	}
+	return secondaryIndexes, nil
 }
 
 // serialisation strategy: [PK_column_position][columnDataType1][columnNameLength1][columnName1][columnDataType2][columnNameLength2][columnName2]...

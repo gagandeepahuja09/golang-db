@@ -146,16 +146,21 @@
     - Add support for composite index also. (d)
     - Change in functions and structs (d)
     - Change in parser (todo)
-    - UTs (todo)
+    - UTs (wip)
     - Make it atomic (todo)
-    - Create Index (todo for next PR)
+    - Create Index command + Create Concurrently (todo for next PR)
 2. Update logic in insert to also write to indexes.
-    - Logic (wip)
-    - Make it atomic (todo)
+    - Logic (d)
+    - Make it atomic (d)
     - UTs
 3. Update in buildMemtableFromWal (not needed: we will need to make operations atomic instead)
-    - Update startup logic to set the secondary indexes in db.TableNameVsSchemaMap (todo)
+    - Update startup logic to set the secondary indexes in db.TableNameVsSchemaMap (d)
+        - UT (d)
 4. Update logic in select to check if index exists. (only support one WHERE clause for now)
+5. Done: need to fix some regressions also with application restart tests failing.
+    - Bugfix required: ```// read [command_length(4_bytes)][command_string] to figure out the command type
+		// and accordingly deserialise.```. Looks like we are deserialising transaction payload by expecting byte length to be written but not doing the same while PUT commands is done.
+6. Tests to assert the atomic behaviour (todo)
 
 #### Milestone 1: Test for create table changes for index. Validate that after application startup, 
 

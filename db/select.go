@@ -113,7 +113,5 @@ func (db *DB) fullTableScan(tableName string) ([][]string, error) {
 		scanOutput = append(scanOutput, values)
 	}
 
-	fmt.Printf("memTableMap111: %+v\n", memTableMap)
-	fmt.Printf("ssTableMap111: %+v\n", ssTableMap)
 	return scanOutput, nil
 }

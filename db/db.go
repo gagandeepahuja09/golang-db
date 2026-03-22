@@ -99,6 +99,17 @@ func (db *DB) getTableNameVsSchemaMap() (map[string]sqlparser.CreateTable, error
 			return nil, err
 		}
 		createTableInput.TableName = tableName
+
+		secondaryIndexesStr, err := db.Get(fmt.Sprintf(SecondaryIndexesCatalogKeyTemplate, tableName))
+		if err != nil {
+			return nil, err
+		}
+		secondaryIndexes, err := db.deserialiseSecondaryIndexCatalog(tableName, []byte(secondaryIndexesStr), createTableInput.ColumnDetails)
+		if err != nil {
+			return nil, err
+		}
+		createTableInput.SecondaryIndexes = secondaryIndexes
+
 		tableNameVsSchemaMap[tableName] = *createTableInput
 	}
 	return tableNameVsSchemaMap, nil
@@ -158,8 +169,17 @@ func (db *DB) flushMemtableToSsTable() error {
 }
 
 func (db *DB) writeToWal(key, value string) error {
-	payload := fmt.Sprintf("PUT %s %s", key, value)
-	return db.wal.WriteEntry([]byte(payload))
+	buf := serialiseCommand("PUT", fmt.Sprintf("PUT %s %s", key, value))
+	return db.wal.WriteEntry(buf)
+}
+
+func serialiseCommand(command, payload string) []byte {
+	buf := []byte{}
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(command)))
+	buf = append(buf, []byte(command)...)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(payload)))
+	buf = append(buf, []byte(payload)...)
+	return buf
 }
 
 func handlePutCmd(memTable memtable.Memtable, line string) error {
