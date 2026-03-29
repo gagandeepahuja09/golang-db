@@ -19,7 +19,7 @@ const (
 	CatalogKey                               = "_calatog"
 	SecondaryIndexesCatalogKeyTemplate       = "_secondary_indexes:%s"
 	SchemaTemplate                           = "_schema:%s"
-	IndexKeyTemplateTableNameIndexNamePrefix = "%s:%s"
+	IndexKeyTemplateTableNameIndexNamePrefix = "index:%s:%s"
 )
 
 type LocksAcquired struct {
@@ -311,26 +311,34 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 	}
 
 	// todo: also test for the atomicity in the end-to-end test.
-	// todo: another PUT for secondary index
+	db.updateSecondaryIndexes(insertIntoTableInput, txn)
 
-	// 1. find all the relevant indexes for this table.
-	// 2. for each Put query will be fired separately.
+	txn.Commit()
 
+	return nil
+}
+
+func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTable, txn *Transaction) {
+	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
 	secondaryIndexes := table.SecondaryIndexes
 
+	// 1. Go through each secondary index applicable for the table.
 	for _, secondaryIndex := range secondaryIndexes {
 		indexKey := fmt.Sprintf(IndexKeyTemplateTableNameIndexNamePrefix, insertIntoTableInput.TableName,
 			secondaryIndex.IndexName)
-		// go through each secondary index applicable for the table
-		// find all the relevant column values.
-		// secondaryIndex.Columns: this is just column name
-		// iterate through it and find order for each
-		// insertIntoTableInput.ColumnValues: this is as per column order
+		// 2. For each secondary index, construct index key of the format:
+		//  `index:<table_name>:<index_name>:<column_name>:<column_value>:pk_value_1`
+		// 3. Iterate through all the columns part of the index
 		for _, indexColumn := range secondaryIndex.Columns {
 			// find position of indexColumn
 			indexKey += fmt.Sprintf("%s:", indexColumn)
 			indexColValues := ""
 			pkColValue := ""
+			// 4. secondaryIndex.Columns stores the column names.
+			// insertIntoTableInput stores the column values in an array where the position in the array
+			// also specifies the column position.
+			// In order to find the value for the index columns, find the position of that column in the array
+			// todo: we can optimise it.
 			for i, col := range table.ColumnDetails {
 				if col.ColumnName == indexColumn {
 					// handle for column position
@@ -341,15 +349,12 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 					pkColValue = insertIntoTableInput.ColumnValues[i]
 				}
 			}
+			// 5. Populate index column values and then the primary key.
 			indexKey += indexColValues
 			indexKey += pkColValue
 			txn.Put(indexKey, "")
 		}
 	}
-
-	txn.Commit()
-
-	return nil
 }
 
 func (db *DB) ShowTables() []string {
