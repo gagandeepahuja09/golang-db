@@ -318,43 +318,61 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 	return nil
 }
 
-func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTable, txn *Transaction) {
+// generic function which can be used for both GET (pkColValue not available as found out after prefix)
+// and PUT (pkColValue should always be present) operations
+// Key structure `index:<table_name>:<index_name>:<column_value_1>:<column_value_2>:<pk_value_1>`
+// pk_value_1 would be missing in prefix for GET
+func getSecondaryIndexKeyOrPrefix(tableName, indexName string, columnValues []string, primaryKeyValue string) string {
+	indexKey := fmt.Sprintf(IndexKeyTemplateTableNameIndexNamePrefix, tableName, indexName)
+	pkColValue := ""
+	indexColValues := ""
+	for _, colValue := range columnValues {
+		indexColValues += (":" + colValue)
+	}
+	indexKey += indexColValues
+	if pkColValue != "" {
+		indexKey += (":" + pkColValue)
+	}
+	return indexKey
+}
+
+func (db *DB) getIndexAndPrimaryKeyColumnValuesInIndexSequence(indexColumnNames []string, insertIntoTableInput sqlparser.InsertIntoTable) ([]string, string, error) {
+	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
+
+	colValues := []string{}
+	pkColValue := ""
+	for _, indexColumnName := range indexColumnNames {
+		for i, col := range table.ColumnDetails {
+			if col.ColumnName == indexColumnName {
+				colValues = append(colValues, insertIntoTableInput.ColumnValues[i])
+			}
+			if i == table.PrimaryKeyColumnPosition {
+				pkColValue = insertIntoTableInput.ColumnValues[i]
+			}
+		}
+	}
+	if len(colValues) != len(indexColumnNames) {
+		return nil, "", errors.New("all column values not found")
+	}
+	if pkColValue == "" {
+		return nil, "", errors.New("primary key column value not found")
+	}
+	return colValues, pkColValue, nil
+}
+
+func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTable, txn *Transaction) error {
 	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
 	secondaryIndexes := table.SecondaryIndexes
 
-	// 1. Go through each secondary index applicable for the table.
 	for _, secondaryIndex := range secondaryIndexes {
-		indexKey := fmt.Sprintf(IndexKeyTemplateTableNameIndexNamePrefix, insertIntoTableInput.TableName,
-			secondaryIndex.IndexName)
-		// 2. For each secondary index, construct index key of the format:
-		//  `index:<table_name>:<index_name>:<column_name>:<column_value>:pk_value_1`
-		// 3. Iterate through all the columns part of the index
-		for _, indexColumn := range secondaryIndex.Columns {
-			// find position of indexColumn
-			indexKey += fmt.Sprintf("%s:", indexColumn)
-			indexColValues := ""
-			pkColValue := ""
-			// 4. secondaryIndex.Columns stores the column names.
-			// insertIntoTableInput stores the column values in an array where the position in the array
-			// also specifies the column position.
-			// In order to find the value for the index columns, find the position of that column in the array
-			// todo: we can optimise it.
-			for i, col := range table.ColumnDetails {
-				if col.ColumnName == indexColumn {
-					// handle for column position
-					colValue := insertIntoTableInput.ColumnValues[i]
-					indexColValues = fmt.Sprintf("%s:", colValue)
-				}
-				if i == table.PrimaryKeyColumnPosition {
-					pkColValue = insertIntoTableInput.ColumnValues[i]
-				}
-			}
-			// 5. Populate index column values and then the primary key.
-			indexKey += indexColValues
-			indexKey += pkColValue
-			txn.Put(indexKey, "")
+		colValues, pkColValue, err := db.getIndexAndPrimaryKeyColumnValuesInIndexSequence(secondaryIndex.Columns, insertIntoTableInput)
+		if err != nil {
+			return err
 		}
+		secondaryIndexKey := getSecondaryIndexKeyOrPrefix(insertIntoTableInput.TableName, secondaryIndex.IndexName, colValues, pkColValue)
+		txn.Put(secondaryIndexKey, "")
 	}
+	return nil
 }
 
 func (db *DB) ShowTables() []string {

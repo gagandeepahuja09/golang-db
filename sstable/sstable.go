@@ -354,8 +354,9 @@ func (st *SsTable) Get(key string) (string, error) {
 	return "", nil
 }
 
-// return a map of the full table
-func (st *SsTable) FullTableScan(tableKey string) (map[string]string, error) {
+// given the prefix key, PrefixScan returns the serialised key
+// and value in a map for all keys which match that prefix in the sstable.
+func (st *SsTable) PrefixScan(prefixKey string) (map[string]string, error) {
 	st.mutex.RLock()
 	defer st.mutex.RUnlock()
 	tableMap := map[string]string{}
@@ -363,11 +364,11 @@ func (st *SsTable) FullTableScan(tableKey string) (map[string]string, error) {
 	for i := len(st.firstLevelFiles) - 1; i >= 0; i-- {
 		file := st.firstLevelFiles[i]
 		ssTableIndex := st.indexBlocks[i]
-		lowerBoundSliceIndex := getLowerBound(tableKey, ssTableIndex)
+		lowerBoundSliceIndex := getLowerBound(prefixKey, ssTableIndex)
 		// means that even the first key prefix >= prefix in tableKey
 		if lowerBoundSliceIndex == -1 {
 			// if prefix doesn't match for the first key, no need to read this file
-			if len(ssTableIndex) == 0 || !strings.HasPrefix(ssTableIndex[0].key, tableKey) {
+			if len(ssTableIndex) == 0 || !strings.HasPrefix(ssTableIndex[0].key, prefixKey) {
 				continue
 			}
 			// if prefix matches, we need to read the entire file till we encounter a different prefix
@@ -377,7 +378,7 @@ func (st *SsTable) FullTableScan(tableKey string) (map[string]string, error) {
 		endOffset := st.indexOffsets[i]
 
 		var err error
-		tableMap, err = st.sequentiallyScanTableAndUpdateMap(file, tableKey,
+		tableMap, err = st.sequentiallyScanTableAndUpdateMap(file, prefixKey,
 			ssTableIndex[lowerBoundSliceIndex].offset, endOffset, tableMap)
 		if err != nil {
 			return nil, err

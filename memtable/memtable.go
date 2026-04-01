@@ -60,9 +60,9 @@ func (m *Memtable) Put(key, value string) {
 	}
 }
 
-// given the prefix key of a table, FullTableScan returns the serialised key
-// and value for that table for all the relevant table rows in the memtable.
-func (m *Memtable) FullTableScan(prefixKey string) map[string]string {
+// given the prefix key, PrefixScan returns the serialised key
+// and value in a map for all keys which match that prefix in the memtable.
+func (m *Memtable) PrefixScan(prefixKey string) map[string]string {
 	tableMap := map[string]string{}
 	m.tree.AscendGreaterOrEqual(&Entry{Key: prefixKey}, func(item btree.Item) bool {
 		e := item.(*Entry)

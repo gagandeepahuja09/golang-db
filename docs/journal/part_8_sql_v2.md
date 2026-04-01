@@ -86,12 +86,12 @@
 - **How will we store the data?** 
     - One column value will be associated to multiple rows in the table. Hence this is a one-to-many-mapping.
     - We can store the data in a way such that the key itself gives us all the relevant data.
-    - Key: `index:<table_name>:<index_name>:<column_name>:<column_value>:pk_value_1`, Value: can be empty.
+    - Key: `index:<table_name>:<index_name>:<column_value>:pk_value_1`, Value: can be empty.
     - Example: Index on city column.
     - index:city:NYC:id_1, index:city:NYC:id_2, index:city:NYC:id_5, ... 
 - **How will we get the data during reads?**
-    - Prefix scan on `index:<table_name>:<column_name>:<column_value>` --> extract all primary keys 
-    - Do a get for each primary key to extract all the relevant 
+    - Prefix scan on `index:<table_name>:<index_name>:<column_value>` --> extract all primary keys 
+    - Do a get for each primary key to extract all the relevant rows
     - Question: is this really optimal? Full-table scan instead has mostly sequential scans while this approach might have a lot of random seeks as well due to prefix scan + GET.
     - As per my understanding, this approach well but in skewed cases where an index value contributes to 50% of more of the rows, this approach would not scale well.
         - Query planner can maybe choose to not use index in such cases. Query planner section covers these things in detail which will be solved after adding secondary index.
@@ -146,7 +146,7 @@
     - Add support for composite index also. (d)
     - Change in functions and structs (d)
     - Change in parser (todo)
-    - UTs (wip)
+    - UTs (d)
     - Make it atomic (todo)
     - Create Index command + Create Concurrently (todo for next PR)
 2. Update logic in insert to also write to indexes.
@@ -156,11 +156,17 @@
 3. Update in buildMemtableFromWal (not needed: we will need to make operations atomic instead)
     - Update startup logic to set the secondary indexes in db.TableNameVsSchemaMap (d)
         - UT (d)
-4. Update logic in select to check if index exists. (only support one WHERE clause for now)
+4. Update logic in SELECT to check if index exists. (only support one WHERE clause for now)
+    - Check from index catalog if index is present for the WHERE clause. (wip)
+    - Full-table scan functions need to be updated to be made generic as prefixScan.
+    - If yes, utilise the index. Range scans are not yet solved for.
+    - End to end tests with INSERT and SELECT
+    - Assert that SELECT happening via secondary index, also benchmark for performance
 5. Done: need to fix some regressions also with application restart tests failing.
     - Bugfix required: ```// read [command_length(4_bytes)][command_string] to figure out the command type
 		// and accordingly deserialise.```. Looks like we are deserialising transaction payload by expecting byte length to be written but not doing the same while PUT commands is done.
 6. Tests to assert the atomic behaviour (todo)
+7. 
 
 #### Milestone 1: Test for create table changes for index. Validate that after application startup, 
 
