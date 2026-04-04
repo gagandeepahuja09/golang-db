@@ -83,6 +83,7 @@ func (db *DB) getQueryResultFromSecondaryIndexIfApplicable(tableName string, sel
 	// Run GET query for each primary key id separately and combine the result of each.
 	queryResult := [][]string{}
 	for _, pkId := range primaryKeyIds {
+		fmt.Printf("pkId555: %v\n", pkId)
 		rowValues, err := db.getRowForPrimaryKey(tableName, pkId)
 		if err != nil {
 			return nil, err
@@ -130,6 +131,7 @@ func (db *DB) selectFromTable(selectFromTableInput sqlparser.SelectFromTable) ([
 func (db *DB) deserializeRowValues(tableName, value string) ([]string, error) {
 	// read byte inputs
 	schema := db.tableNameVsSchemaMap[tableName]
+	fmt.Printf("value4444: %v\n", value)
 	valueBuf := []byte(value)
 	i := 0
 	rowValues := []string{}
@@ -196,10 +198,12 @@ func (db *DB) secondaryIndexPrefixScan(prefixKey string) ([]string, error) {
 
 	primaryKeyIds := []string{}
 	for key, _ := range ssTableMap {
+		fmt.Printf("key777: %v\n", key)
 		keyElements := strings.Split(key, ":")
 		primaryKeyIds = append(primaryKeyIds, keyElements[len(keyElements)-1])
 	}
 	for key, _ := range memTableMap {
+		fmt.Printf("key888: %v\n", key)
 		keyElements := strings.Split(key, ":")
 		primaryKeyIds = append(primaryKeyIds, keyElements[len(keyElements)-1])
 	}
