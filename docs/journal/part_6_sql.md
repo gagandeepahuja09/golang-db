@@ -24,6 +24,8 @@
     - Output the result as per the data types.
 - Note: this serialization and deserialization will happen both during memtable and SS Table reads and writes.
 
+### Note on binary serialisation, deserialisation performance compared to JSON
+
 ## SQL Parsing
 - check command O ==> CREATE TABLE ==> call insertTable function ==> split by comma to get datatype and column name.
 

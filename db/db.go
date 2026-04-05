@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	CatalogKey     = "_calatog"
-	SchemaTemplate = "_schema:%s"
+	CatalogKey                               = "_calatog"
+	SecondaryIndexesCatalogKeyTemplate       = "_secondary_indexes:%s"
+	SchemaTemplate                           = "_schema:%s"
+	IndexKeyTemplateTableNameIndexNamePrefix = "index:%s:%s"
 )
 
 type LocksAcquired struct {
@@ -97,6 +99,17 @@ func (db *DB) getTableNameVsSchemaMap() (map[string]sqlparser.CreateTable, error
 			return nil, err
 		}
 		createTableInput.TableName = tableName
+
+		secondaryIndexesStr, err := db.Get(fmt.Sprintf(SecondaryIndexesCatalogKeyTemplate, tableName))
+		if err != nil {
+			return nil, err
+		}
+		secondaryIndexes, err := db.deserialiseSecondaryIndexCatalog(tableName, []byte(secondaryIndexesStr), createTableInput.ColumnDetails)
+		if err != nil {
+			return nil, err
+		}
+		createTableInput.SecondaryIndexes = secondaryIndexes
+
 		tableNameVsSchemaMap[tableName] = *createTableInput
 	}
 	return tableNameVsSchemaMap, nil
@@ -156,8 +169,17 @@ func (db *DB) flushMemtableToSsTable() error {
 }
 
 func (db *DB) writeToWal(key, value string) error {
-	payload := fmt.Sprintf("PUT %s %s", key, value)
-	return db.wal.WriteEntry([]byte(payload))
+	buf := serialiseCommand("PUT", fmt.Sprintf("PUT %s %s", key, value))
+	return db.wal.WriteEntry(buf)
+}
+
+func serialiseCommand(command, payload string) []byte {
+	buf := []byte{}
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(command)))
+	buf = append(buf, []byte(command)...)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(payload)))
+	buf = append(buf, []byte(payload)...)
+	return buf
 }
 
 func handlePutCmd(memTable memtable.Memtable, line string) error {
@@ -207,15 +229,6 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 	}
 }
 
-func (db *DB) CreateTable(query string) error {
-	parser := sqlparser.NewParser(query)
-	input, err := parser.ParseCreateTable()
-	if err != nil {
-		return err
-	}
-	return db.createTable(*input)
-}
-
 func (db *DB) Begin() (*Transaction, error) {
 	db.transactionManager.mu.Lock()
 	defer db.transactionManager.mu.Unlock()
@@ -226,30 +239,6 @@ func (db *DB) Begin() (*Transaction, error) {
 	}
 	db.transactionManager.nextTransactionId++
 	return &txn, nil
-}
-
-func (db *DB) createTable(createTableInput sqlparser.CreateTable) error {
-	// todo: checking for table name already exists
-	// todo: since we are doing 2 different Put operations, createTable is not actually atomic
-
-	db.tableNameVsSchemaMap[createTableInput.TableName] = createTableInput
-
-	var tableNames string
-	for _, table := range db.tableNameVsSchemaMap {
-		tableNames += table.TableName
-		tableNames += ","
-	}
-	tableNamesLength := len(tableNames)
-	tableNames = tableNames[:tableNamesLength-1]
-
-	// PERFORM PUT operation with _catalog key and all table names.
-	db.Put(CatalogKey, tableNames)
-
-	// PERFORM PUT operation with _schema:[table_name] key
-	db.Put(fmt.Sprintf(SchemaTemplate, createTableInput.TableName), string(
-		serialiseCreateTableInput(createTableInput)))
-
-	return nil
 }
 
 func (db *DB) InsertIntoTable(query string) error {
@@ -304,6 +293,11 @@ func (db *DB) serialiseInsertIntoTableInput(insertIntoTableInput sqlparser.Inser
 }
 
 func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) error {
+	txn, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
 	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
 	if len(insertIntoTableInput.ColumnValues) != len(table.ColumnDetails) {
 		return errors.New("INSERT INTO requires all columns to be present. ")
@@ -312,7 +306,75 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 	if err != nil {
 		return err
 	}
-	return db.Put(key, string(valueSchemaBuf))
+	if err := txn.Put(key, string(valueSchemaBuf)); err != nil {
+		txn.Rollback()
+	}
+
+	// todo: also test for the atomicity in the end-to-end test.
+	err = db.updateSecondaryIndexes(insertIntoTableInput, txn)
+	if err != nil {
+		txn.Rollback()
+	}
+
+	txn.Commit()
+
+	return nil
+}
+
+// generic function which can be used for both GET (pkColValue not available as found out after prefix)
+// and PUT (pkColValue should always be present) operations
+// Key structure `index:<table_name>:<index_name>:<column_value_1>:<column_value_2>:<pk_value_1>`
+// pk_value_1 would be missing in prefix for GET
+func getSecondaryIndexKeyOrPrefix(tableName, indexName string, columnValues []string, primaryKeyValue string) string {
+	indexKey := fmt.Sprintf(IndexKeyTemplateTableNameIndexNamePrefix, tableName, indexName)
+	indexColValues := ""
+	for _, colValue := range columnValues {
+		indexColValues += (":" + colValue)
+	}
+	indexKey += indexColValues
+	if primaryKeyValue != "" {
+		indexKey += (":" + primaryKeyValue)
+	}
+	return indexKey
+}
+
+func (db *DB) getIndexAndPrimaryKeyColumnValuesInIndexSequence(indexColumnNames []string, insertIntoTableInput sqlparser.InsertIntoTable) ([]string, string, error) {
+	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
+
+	colValues := []string{}
+	pkColValue := ""
+	for _, indexColumnName := range indexColumnNames {
+		for i, col := range table.ColumnDetails {
+			if col.ColumnName == indexColumnName {
+				colValues = append(colValues, insertIntoTableInput.ColumnValues[i])
+			}
+			if i == table.PrimaryKeyColumnPosition {
+				pkColValue = insertIntoTableInput.ColumnValues[i]
+			}
+		}
+	}
+	if len(colValues) != len(indexColumnNames) {
+		return nil, "", errors.New("all column values not found")
+	}
+	if pkColValue == "" {
+		return nil, "", errors.New("primary key column value not found")
+	}
+	return colValues, pkColValue, nil
+}
+
+func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTable, txn *Transaction) error {
+	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
+	secondaryIndexes := table.SecondaryIndexes
+
+	for _, secondaryIndex := range secondaryIndexes {
+		colValues, pkColValue, err := db.getIndexAndPrimaryKeyColumnValuesInIndexSequence(secondaryIndex.Columns, insertIntoTableInput)
+		if err != nil {
+			return err
+		}
+		secondaryIndexKey := getSecondaryIndexKeyOrPrefix(insertIntoTableInput.TableName, secondaryIndex.IndexName, colValues, pkColValue)
+		txn.Put(secondaryIndexKey, "")
+	}
+	return nil
 }
 
 func (db *DB) ShowTables() []string {
@@ -330,57 +392,4 @@ func (db *DB) ShowCreateTable(tableName string) (*sqlparser.CreateTable, error) 
 		}
 	}
 	return nil, fmt.Errorf("table: '%s' not found", tableName)
-}
-
-// serialisation strategy: [PK_column_position][columnDataType1][columnNameLength1][columnName1][columnDataType2][columnNameLength2][columnName2]...
-func serialiseCreateTableInput(createTableInput sqlparser.CreateTable) []byte {
-	serialisedSchema := []byte{}
-	serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(createTableInput.PrimaryKeyColumnPosition))
-
-	for _, col := range createTableInput.ColumnDetails {
-		serialisedSchema = append(serialisedSchema, byte(col.DataType))
-		serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(len(col.ColumnName)))
-		serialisedSchema = append(serialisedSchema, []byte(col.ColumnName)...)
-	}
-
-	return serialisedSchema
-}
-
-func deserialiseCreateTableInput(buf []byte) (*sqlparser.CreateTable, error) {
-	var createTableMeta sqlparser.CreateTable
-	i := 0
-	if len(buf) < 4 {
-		return nil, errors.New("unexpected error while reading primary key column position")
-	}
-	primaryKeyColumnPosition := binary.BigEndian.Uint32(buf[i : i+4])
-	createTableMeta.PrimaryKeyColumnPosition = int(primaryKeyColumnPosition)
-	i += 4
-
-	columnDetails := []sqlparser.Column{}
-	for i < len(buf) {
-		var columnMeta sqlparser.Column
-		dataType := buf[i]
-		if i+1 > len(buf) {
-			return nil, errors.New("unexpected error while reading column data type")
-		}
-		columnMeta.DataType = sqlparser.DataType(dataType)
-		i++
-
-		if i+4 > len(buf) {
-			return nil, errors.New("unexpected error while reading column length")
-		}
-		columnNameLength := binary.BigEndian.Uint32(buf[i : i+4])
-		i += 4
-
-		if i+int(columnNameLength) > len(buf) {
-			return nil, errors.New("unexpected error while reading column name")
-		}
-		columnMeta.ColumnName = string(buf[i : i+int(columnNameLength)])
-		i += int(columnNameLength)
-
-		columnDetails = append(columnDetails, columnMeta)
-	}
-	createTableMeta.ColumnDetails = columnDetails
-
-	return &createTableMeta, nil
 }

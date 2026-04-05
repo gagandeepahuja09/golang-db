@@ -1,7 +1,6 @@
 package memtable
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/google/btree"
@@ -61,15 +60,13 @@ func (m *Memtable) Put(key, value string) {
 	}
 }
 
-// given the prefix key of a table, FullTableScan returns the serialised key
-// and value for that table for all the relevant table rows in the memtable.
-func (m *Memtable) FullTableScan(prefixKey string) map[string]string {
-	fmt.Printf("prefixKey5555: %v\n", prefixKey)
+// given the prefix key, PrefixScan returns the serialised key
+// and value in a map for all keys which match that prefix in the memtable.
+func (m *Memtable) PrefixScan(prefixKey string) map[string]string {
 	tableMap := map[string]string{}
 	m.tree.AscendGreaterOrEqual(&Entry{Key: prefixKey}, func(item btree.Item) bool {
 		e := item.(*Entry)
 		key := e.Key
-		fmt.Printf("key4444: %v\n", key)
 		if !strings.HasPrefix(key, prefixKey) {
 			return false
 		}

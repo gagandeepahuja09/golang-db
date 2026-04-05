@@ -4,6 +4,13 @@ type CreateTable struct {
 	TableName                string
 	ColumnDetails            []Column
 	PrimaryKeyColumnPosition int
+	// todo: some checks for validating that indexes are not created with similar column or group of columns
+	SecondaryIndexes []SecondaryIndex
+}
+
+type SecondaryIndex struct {
+	Columns   []string
+	IndexName string
 }
 
 type InsertIntoTable struct {
