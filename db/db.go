@@ -313,7 +313,6 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 	// todo: also test for the atomicity in the end-to-end test.
 	err = db.updateSecondaryIndexes(insertIntoTableInput, txn)
 	if err != nil {
-		fmt.Printf("err8080: %+v\n", err)
 		txn.Rollback()
 	}
 
@@ -334,11 +333,8 @@ func getSecondaryIndexKeyOrPrefix(tableName, indexName string, columnValues []st
 	}
 	indexKey += indexColValues
 	if primaryKeyValue != "" {
-		fmt.Println("REACHED_MI")
 		indexKey += (":" + primaryKeyValue)
 	}
-	fmt.Printf("pkColValue2525: %v\n", primaryKeyValue)
-	fmt.Printf("indexKey888: %v\n", indexKey)
 	return indexKey
 }
 
@@ -372,12 +368,9 @@ func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTa
 
 	for _, secondaryIndex := range secondaryIndexes {
 		colValues, pkColValue, err := db.getIndexAndPrimaryKeyColumnValuesInIndexSequence(secondaryIndex.Columns, insertIntoTableInput)
-		fmt.Printf("colValues555: %v\n", colValues)
-		fmt.Printf("pkColValue777: %v\n", pkColValue)
 		if err != nil {
 			return err
 		}
-		fmt.Println("SAFE_FROM_ERROR_2222")
 		secondaryIndexKey := getSecondaryIndexKeyOrPrefix(insertIntoTableInput.TableName, secondaryIndex.IndexName, colValues, pkColValue)
 		txn.Put(secondaryIndexKey, "")
 	}

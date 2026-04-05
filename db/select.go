@@ -54,12 +54,6 @@ func getSecondaryIndexForQueryIfApplicable(selectFromTableInput sqlparser.Select
 		}
 		if secIdxColsCoveredInInputQuery == len(secondaryIndex.Columns) {
 			return &secondaryIndex
-			// 1. prefixScan on the index based key
-			// prefixScan
-			// 2. Read all the primary keys. Run GET for each, collect and return result
-			// we can use this secondary index
-			// how to use it?
-			// run a prefix scan GET
 		}
 	}
 	return nil
@@ -83,7 +77,6 @@ func (db *DB) getQueryResultFromSecondaryIndexIfApplicable(tableName string, sel
 	// Run GET query for each primary key id separately and combine the result of each.
 	queryResult := [][]string{}
 	for _, pkId := range primaryKeyIds {
-		fmt.Printf("pkId555: %v\n", pkId)
 		rowValues, err := db.getRowForPrimaryKey(tableName, pkId)
 		if err != nil {
 			return nil, err
