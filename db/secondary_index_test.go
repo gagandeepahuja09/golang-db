@@ -108,6 +108,7 @@ func TestSecondaryIndexCreation(t *testing.T) {
 			fmt.Sprintf("%d", arrIdx%5), fmt.Sprintf("%d", arrIdx%2)}, queryRes[0])
 	}
 
+	// test the result for c3 and c4 combined composite index
 	for i := 0; i < 10; i++ {
 		queryRes, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
 			TableName: "t1",
@@ -132,10 +133,19 @@ func TestSecondaryIndexCreation(t *testing.T) {
 			fmt.Sprintf("%d", i%5), fmt.Sprintf("%d", i%2)}, queryRes[0])
 	}
 
-	// test for empty result cases.
-
-	// test for prefix based composite index query not supported.
-	// QueryCondition only containing c3 and not c4
+	for i := 0; i < 10; i++ {
+		_, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
+			TableName: "t1",
+			QueryConditions: []sqlparser.QueryCondition{
+				{
+					ColumnName: "c3",
+					QueryType:  sqlparser.Equals,
+					Value:      fmt.Sprintf("%d", i%5),
+				},
+			},
+		})
+		assert.Equal(t, "query not supported", err.Error())
+	}
 
 	// todo: benchmarking for performance: with and without indexes.
 
