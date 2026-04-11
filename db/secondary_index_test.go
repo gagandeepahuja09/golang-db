@@ -8,9 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSecondaryIndexCreation(t *testing.T) {
-	// 1. call create table with secondaryIndex params
-	// 2. check the db.tableNameVsSchemaMap
+func TestSecondaryIndexBasedQueries(t *testing.T) {
 	dbInstance, cleanupFunc, err := newDBForTest()
 	defer cleanupFunc()
 
@@ -80,7 +78,7 @@ func TestSecondaryIndexCreation(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// test the result for c1, c2 indexes separately
+	// part 1: test the result for c1, c2 indexes separately
 	for i := 0; i < 20; i++ {
 		columnName := "c1"
 		valueTemplate := "val1_%d"
@@ -108,7 +106,7 @@ func TestSecondaryIndexCreation(t *testing.T) {
 			fmt.Sprintf("%d", arrIdx%5), fmt.Sprintf("%d", arrIdx%2)}, queryRes[0])
 	}
 
-	// test the result for c3 and c4 combined composite index
+	// part 2: test the result for c3 and c4 combined composite index
 	for i := 0; i < 10; i++ {
 		queryRes, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
 			TableName: "t1",
@@ -133,14 +131,33 @@ func TestSecondaryIndexCreation(t *testing.T) {
 			fmt.Sprintf("%d", i%5), fmt.Sprintf("%d", i%2)}, queryRes[0])
 	}
 
-	for i := 0; i < 10; i++ {
-		_, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
+	// part 3: test the result for c3 which is a prefix of c3, c4 composite index
+	for i := 0; i < 5; i++ {
+		queryRes, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
 			TableName: "t1",
 			QueryConditions: []sqlparser.QueryCondition{
 				{
 					ColumnName: "c3",
 					QueryType:  sqlparser.Equals,
-					Value:      fmt.Sprintf("%d", i%5),
+					Value:      fmt.Sprintf("%d", i),
+				},
+			},
+		})
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, [][]string{
+			{fmt.Sprintf("val1_%d", i), fmt.Sprintf("val2_%d", i), fmt.Sprintf("%d", i), fmt.Sprintf("%d", i%2)},
+			{fmt.Sprintf("val1_%d", i+5), fmt.Sprintf("val2_%d", i+5), fmt.Sprintf("%d", i), fmt.Sprintf("%d", (i+5)%2)}}, queryRes)
+	}
+
+	// part 4: test the result for c4: no index exists
+	for i := 0; i < 2; i++ {
+		_, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
+			TableName: "t1",
+			QueryConditions: []sqlparser.QueryCondition{
+				{
+					ColumnName: "c4",
+					QueryType:  sqlparser.Equals,
+					Value:      fmt.Sprintf("%d", i),
 				},
 			},
 		})
