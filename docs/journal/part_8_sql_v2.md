@@ -168,7 +168,11 @@
 6. Tests to assert the atomic behaviour (todo)
 7. 
 
-#### Milestone 1: Test for create table changes for index. Validate that after application startup, 
+### Secondary Index + In-memory filter
+- Rather than choosing secondary index only when all columns in the WHERE clause are covered, choose an index also when it covers one or more WHERE clause. Since we are not doing query planning, for now we will pick the first index which can be used in such cases. First find an index if that covers the entire WHERE clause, if not pick any which covers few columns. 
+- **Handling of composite indexes**: For choosing a composite index, we would have to check and choose all possible prefix combinations.
+- **Support for AND queries**
+- **Support for Range queries**
 
 ## Query planner
 - Query planner is going to be a very interesting thing to build. Estimate which direction would produce the most efficient result without actually executing the query.

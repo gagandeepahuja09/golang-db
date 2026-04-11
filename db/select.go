@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -33,11 +34,13 @@ func (db *DB) getRowForPrimaryKey(tableName, primaryKeyId string) ([]string, err
 }
 
 // go through each secondary index. check if any of the secondary index can independently cover all WHERE conditions
-// todo: not solving for AND queries right now. only using secondary index when all columns are covered
+// if not ALL conditions, check if some of the conditions from the prefix of the WHERE condition can be covered.
 // returns nil if no secondary index is applicable
-func getSecondaryIndexForQueryIfApplicable(selectFromTableInput sqlparser.SelectFromTable, secondaryIndexes []sqlparser.SecondaryIndex) *sqlparser.SecondaryIndex {
+func getSecondaryIndexForQueryIfApplicable(selectFromTableInput sqlparser.SelectFromTable, secondaryIndexes []sqlparser.SecondaryIndex) (*sqlparser.SecondaryIndex, []string) {
+	var candidateSecondaryIndex *sqlparser.SecondaryIndex
+	colsCoveredInCandidateSecondaryIndex := []string{}
 	for _, secondaryIndex := range secondaryIndexes {
-		secIdxColsCoveredInInputQuery := 0
+		secIdxColsCoveredFromInputQuery := []string{}
 		for _, secIdxCol := range secondaryIndex.Columns {
 			colFoundInInputQuery := false
 			for _, qc := range selectFromTableInput.QueryConditions {
@@ -47,21 +50,78 @@ func getSecondaryIndexForQueryIfApplicable(selectFromTableInput sqlparser.Select
 				}
 			}
 			if colFoundInInputQuery {
-				secIdxColsCoveredInInputQuery++
+				secIdxColsCoveredFromInputQuery = append(secIdxColsCoveredFromInputQuery, secIdxCol)
 			} else {
+				// we are going through each column in the secondary index sequentially
+				// and as soon as we find a secondary index column which is not
+				// part of the input SELECT query conditions, we break.
+				// this is crucial because composite index requires prefix match and even some of the
+				// prefix getting covered is good for choosing an index.
 				break
 			}
-		}
-		if secIdxColsCoveredInInputQuery == len(secondaryIndex.Columns) {
-			return &secondaryIndex
+			if len(secIdxColsCoveredFromInputQuery) == len(secondaryIndex.Columns) {
+				return &secondaryIndex, secIdxColsCoveredFromInputQuery
+			}
+			if len(secIdxColsCoveredFromInputQuery) > 0 {
+				candidateSecondaryIndex = &secondaryIndex
+				colsCoveredInCandidateSecondaryIndex = secIdxColsCoveredFromInputQuery
+			}
 		}
 	}
-	return nil
+	return candidateSecondaryIndex, colsCoveredInCandidateSecondaryIndex
 }
 
-// todo: not solving for AND queries right now. only using secondary index when all columns are covered
+func allColumnsCoveredBySecondaryIndex(secondaryIndex *sqlparser.SecondaryIndex, colsCoveredInSecIndex []string) bool {
+	return len(secondaryIndex.Columns) == len(colsCoveredInSecIndex)
+}
+
+func isQueryConditionApplicable(row []string, colPos int, qc sqlparser.QueryCondition) (bool, error) {
+	switch qc.QueryType {
+	case sqlparser.Equals:
+		return row[colPos] == qc.Value, nil
+	case sqlparser.Lt:
+		return row[colPos] < qc.Value, nil
+	case sqlparser.Lte:
+		return row[colPos] <= qc.Value, nil
+	case sqlparser.Gt:
+		return row[colPos] > qc.Value, nil
+	case sqlparser.Gte:
+		return row[colPos] >= qc.Value, nil
+	}
+	return false, errors.New("query type not supported")
+}
+
+// filters on the basis of all applicable conditions in []sqlparser.QueryCondition.
+// if query result is already covered by secondary index, that filter is not applied.
+func (db *DB) filterQueryConditions(tableName string, queryConditions []sqlparser.QueryCondition,
+	colsCoveredInSecIndex []string, queryResult [][]string) ([][]string, error) {
+	for _, qc := range queryConditions {
+		colName := qc.ColumnName
+		if slices.Contains(colsCoveredInSecIndex, colName) {
+			continue
+		}
+		colPos := db.getColPositionFromColName(tableName, colName)
+		if colPos == -1 {
+			return nil, errors.New("unable to apply all query conditions")
+		}
+		filteredQueryResult := [][]string{}
+		for _, row := range queryResult {
+			applicable, err := isQueryConditionApplicable(row, colPos, qc)
+			if err != nil {
+				return nil, err
+			}
+			if applicable {
+				filteredQueryResult = append(filteredQueryResult, row)
+			}
+		}
+		queryResult = filteredQueryResult
+	}
+	return queryResult, nil
+}
+
+// todo: not solving for RANGE queries within secondary index or primary key right now.
 func (db *DB) getQueryResultFromSecondaryIndexIfApplicable(tableName string, selectFromTableInput sqlparser.SelectFromTable, schema sqlparser.CreateTable) ([][]string, error) {
-	secondaryIndex := getSecondaryIndexForQueryIfApplicable(selectFromTableInput, schema.SecondaryIndexes)
+	secondaryIndex, colsCoveredInSecIndex := getSecondaryIndexForQueryIfApplicable(selectFromTableInput, schema.SecondaryIndexes)
 	if secondaryIndex == nil {
 		return nil, errors.New("query not supported")
 	}
@@ -83,7 +143,11 @@ func (db *DB) getQueryResultFromSecondaryIndexIfApplicable(tableName string, sel
 		}
 		queryResult = append(queryResult, rowValues)
 	}
-	return queryResult, nil
+	if allColumnsCoveredBySecondaryIndex(secondaryIndex, colsCoveredInSecIndex) {
+		return queryResult, nil
+	}
+	return db.filterQueryConditions(tableName, selectFromTableInput.QueryConditions,
+		colsCoveredInSecIndex, queryResult)
 }
 
 // todo: without index scan, AND queries support to be added.
