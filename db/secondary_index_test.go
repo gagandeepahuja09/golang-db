@@ -164,6 +164,8 @@ func TestSecondaryIndexBasedQueries(t *testing.T) {
 		assert.Equal(t, "query not supported", err.Error())
 	}
 
+	// todo: UTs for filters post index with less than, greater than conditions.
+	// todo: logic + UTs for filters via primary key and secondary index with less than, greater than conditions.
 	// todo: benchmarking for performance: with and without indexes.
 
 	// todo: as of now partial indexes are not supported.
