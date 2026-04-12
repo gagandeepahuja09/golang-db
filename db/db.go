@@ -334,6 +334,8 @@ func getSecondaryIndexKeyOrPrefix(tableName, indexName string, columnValues []st
 	indexKey += indexColValues
 	if primaryKeyValue != "" {
 		indexKey += (":" + primaryKeyValue)
+	} else {
+		indexKey += ":"
 	}
 	return indexKey
 }

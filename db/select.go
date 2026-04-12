@@ -119,11 +119,20 @@ func (db *DB) filterQueryConditions(tableName string, queryConditions []sqlparse
 	return queryResult, nil
 }
 
+func (db *DB) runFullTableScanAndFilterConditions(tableName string, selectFromTableInput sqlparser.SelectFromTable) ([][]string, error) {
+	queryResult, err := db.fullTableScan(tableName)
+	if err != nil {
+		return nil, err
+	}
+	return db.filterQueryConditions(tableName, selectFromTableInput.QueryConditions,
+		[]string{}, queryResult)
+}
+
 // todo: not solving for RANGE queries within secondary index or primary key right now.
 func (db *DB) getQueryResultFromSecondaryIndexIfApplicable(tableName string, selectFromTableInput sqlparser.SelectFromTable, schema sqlparser.CreateTable) ([][]string, error) {
 	secondaryIndex, colsCoveredInSecIndex := getSecondaryIndexForQueryIfApplicable(selectFromTableInput, schema.SecondaryIndexes)
 	if secondaryIndex == nil {
-		return nil, errors.New("query not supported")
+		return db.runFullTableScanAndFilterConditions(tableName, selectFromTableInput)
 	}
 	columnValues := []string{}
 	for _, condition := range selectFromTableInput.QueryConditions {
@@ -180,7 +189,6 @@ func (db *DB) selectFromTable(selectFromTableInput sqlparser.SelectFromTable) ([
 		return db.fullTableScan(tableName)
 	}
 
-	// todo: not solving for AND queries right now. only using secondary index when all columns are covered
 	return db.getQueryResultFromSecondaryIndexIfApplicable(tableName, selectFromTableInput, schema)
 }
 
@@ -252,14 +260,21 @@ func (db *DB) secondaryIndexPrefixScan(prefixKey string) ([]string, error) {
 		return nil, err
 	}
 
+	pkSet := make(map[string]bool)
+
 	primaryKeyIds := []string{}
 	for key, _ := range ssTableMap {
 		keyElements := strings.Split(key, ":")
-		primaryKeyIds = append(primaryKeyIds, keyElements[len(keyElements)-1])
+		pk := keyElements[len(keyElements)-1]
+		pkSet[pk] = true
 	}
 	for key, _ := range memTableMap {
 		keyElements := strings.Split(key, ":")
-		primaryKeyIds = append(primaryKeyIds, keyElements[len(keyElements)-1])
+		pk := keyElements[len(keyElements)-1]
+		pkSet[pk] = true
+	}
+	for pk := range pkSet {
+		primaryKeyIds = append(primaryKeyIds, pk)
 	}
 	return primaryKeyIds, nil
 }
