@@ -8,10 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSecondaryIndexBasedQueries(t *testing.T) {
-	dbInstance, cleanupFunc, err := newDBForTest()
-	defer cleanupFunc()
-
+func createTestTable(dbInstance *DB, createIndexOnC2 bool) ([]sqlparser.Column, []sqlparser.SecondaryIndex, error) {
 	colDetails := []sqlparser.Column{
 		{
 			ColumnName: "c1",
@@ -37,21 +34,32 @@ func TestSecondaryIndexBasedQueries(t *testing.T) {
 			IndexName: "idxc1",
 		},
 		{
-			Columns:   []string{"c2"},
-			IndexName: "idxc2",
-		},
-		{
 			Columns:   []string{"c3", "c4"},
 			IndexName: "idxc3c4",
 		},
 		// todo: try with incorrect column name as well
 	}
 
-	err = dbInstance.createTable(sqlparser.CreateTable{
+	if createIndexOnC2 {
+		secondaryIndexes = append(secondaryIndexes, sqlparser.SecondaryIndex{
+			Columns:   []string{"c2"},
+			IndexName: "idxc2"})
+	}
+
+	err := dbInstance.createTable(sqlparser.CreateTable{
 		TableName:        "t1",
 		ColumnDetails:    colDetails,
 		SecondaryIndexes: secondaryIndexes,
 	})
+
+	return colDetails, secondaryIndexes, err
+}
+
+func TestSecondaryIndexBasedQueries(t *testing.T) {
+	dbInstance, cleanupFunc, err := newDBForTest()
+	defer cleanupFunc()
+
+	colDetails, secondaryIndexes, err := createTestTable(dbInstance, true)
 	assert.NoError(t, err)
 	t1Schema := dbInstance.tableNameVsSchemaMap["t1"]
 	assert.Equal(t, secondaryIndexes, t1Schema.SecondaryIndexes)
@@ -151,7 +159,7 @@ func TestSecondaryIndexBasedQueries(t *testing.T) {
 
 	// part 4: test the result for c4: no index exists
 	for i := 0; i < 2; i++ {
-		_, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
+		queryResult, err := dbInstance2.selectFromTable(sqlparser.SelectFromTable{
 			TableName: "t1",
 			QueryConditions: []sqlparser.QueryCondition{
 				{
@@ -161,12 +169,28 @@ func TestSecondaryIndexBasedQueries(t *testing.T) {
 				},
 			},
 		})
-		assert.Equal(t, "query not supported", err.Error())
+		expectedList := [][]string{
+			{"val1_0", "val2_0", "0", "0"},
+			{"val1_2", "val2_2", "2", "0"},
+			{"val1_4", "val2_4", "4", "0"},
+			{"val1_6", "val2_6", "1", "0"},
+			{"val1_8", "val2_8", "3", "0"},
+		}
+		if i == 1 {
+			expectedList = [][]string{
+				{"val1_1", "val2_1", "1", "1"},
+				{"val1_3", "val2_3", "3", "1"},
+				{"val1_5", "val2_5", "0", "1"},
+				{"val1_7", "val2_7", "2", "1"},
+				{"val1_9", "val2_9", "4", "1"},
+			}
+		}
+		assert.ElementsMatch(t, expectedList, queryResult)
+		assert.NoError(t, err)
 	}
 
 	// todo: UTs for filters post index with less than, greater than conditions.
 	// todo: logic + UTs for filters via primary key and secondary index with less than, greater than conditions.
-	// todo: benchmarking for performance: with and without indexes.
 
 	// todo: as of now partial indexes are not supported.
 	// Check the result
