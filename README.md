@@ -1,7 +1,7 @@
 # golang-db
 
 ### Building an embedded database from first principles to maximize learning.
-I'm building this to understand the "magic" under the hood of a database. No shortcuts, no pre-built engines—just Go and a lot of curiosity. I use LLMs as reviewers and guides, providing them with my detailed thought process and where I'm stuck, rather than asking for code to copy-paste. This is the power of learning without deadlines.
+I'm building this to understand the "magic" under the hood of a database. No shortcuts, no pre-built engines. This is just Go and a lot of curiosity. I use LLMs as reviewers and guides, providing them with my detailed thought process and where I'm stuck, rather than asking for code to copy-paste. This is the power of learning without deadlines.
 
 ### Getting Started
 
