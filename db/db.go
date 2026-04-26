@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,12 @@ const (
 	SecondaryIndexesCatalogKeyTemplate       = "_secondary_indexes:%s"
 	SchemaTemplate                           = "_schema:%s"
 	IndexKeyTemplateTableNameIndexNamePrefix = "index:%s:%s"
+	ReservoirSampleForIndexTemplate          = "reservoir_sample:%s"
+	NumRowsTableTemplate                     = "num_rows:%s"
+)
+
+const (
+	ReservoirSampleSize = 1000
 )
 
 type LocksAcquired struct {
@@ -108,6 +116,7 @@ func (db *DB) getTableNameVsSchemaMap() (map[string]sqlparser.CreateTable, error
 		if err != nil {
 			return nil, err
 		}
+		// also maintain metadata on the index for reservoir sample
 		createTableInput.SecondaryIndexes = secondaryIndexes
 
 		tableNameVsSchemaMap[tableName] = *createTableInput
@@ -292,6 +301,29 @@ func (db *DB) serialiseInsertIntoTableInput(insertIntoTableInput sqlparser.Inser
 	return fmt.Sprintf("%s:%s", tableName, primaryKeyValue), valueSchemaBuf, nil
 }
 
+func incrementNumRows(txn *Transaction, tableName string) (int, error) {
+	numRowsKey := fmt.Sprintf(NumRowsTableTemplate, tableName)
+	numRows, err := txn.Get(numRowsKey)
+	if err != nil {
+		return 0, err
+	}
+	if numRows == "" {
+		numRows = "0"
+	}
+
+	numRowsInt, err := strconv.Atoi(numRows)
+	if err != nil {
+		return 0, err
+	}
+	numRowsInt++
+
+	if err := txn.Put(numRowsKey, fmt.Sprintf("%d", numRowsInt)); err != nil {
+		txn.Rollback()
+		return 0, err
+	}
+	return numRowsInt, nil
+}
+
 func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) error {
 	txn, err := db.Begin()
 	if err != nil {
@@ -308,12 +340,20 @@ func (db *DB) insertIntoTable(insertIntoTableInput sqlparser.InsertIntoTable) er
 	}
 	if err := txn.Put(key, string(valueSchemaBuf)); err != nil {
 		txn.Rollback()
+		return err
+	}
+	numRows, err := incrementNumRows(txn, insertIntoTableInput.TableName)
+	if err != nil {
+		return err
 	}
 
 	// todo: also test for the atomicity in the end-to-end test.
-	err = db.updateSecondaryIndexes(insertIntoTableInput, txn)
+	// todo: we are also not solving for composite indexes as of now. that would mean that we would have to revisit our solution again, but IMO it is fine because
+	// current solution is solving some part of the problem and should be extensible when we think about it.
+	err = db.updateSecondaryIndexes(insertIntoTableInput, txn, numRows)
 	if err != nil {
 		txn.Rollback()
+		return err
 	}
 
 	txn.Commit()
@@ -364,7 +404,28 @@ func (db *DB) getIndexAndPrimaryKeyColumnValuesInIndexSequence(indexColumnNames 
 	return colValues, pkColValue, nil
 }
 
-func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTable, txn *Transaction) error {
+func (db *DB) getUpdatedReservoirSample(secondaryIndex sqlparser.SecondaryIndex, colValue string, numRows int) []string {
+	if secondaryIndex.ReservoirSample == nil {
+		secondaryIndex.ReservoirSample = []string{}
+	}
+
+	if numRows < ReservoirSampleSize {
+		secondaryIndex.ReservoirSample = append(secondaryIndex.ReservoirSample, colValue)
+		slices.Sort(secondaryIndex.ReservoirSample)
+		// todo: need to evaluate if it makes more sense to sort during WRITE or READ.
+		// for now, done during WRITE.
+		return secondaryIndex.ReservoirSample
+	}
+
+	randNum := rand.IntN(ReservoirSampleSize)
+	if randNum < numRows {
+		secondaryIndex.ReservoirSample[randNum] = colValue
+		slices.Sort(secondaryIndex.ReservoirSample)
+	}
+	return secondaryIndex.ReservoirSample
+}
+
+func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTable, txn *Transaction, numRows int) error {
 	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
 	secondaryIndexes := table.SecondaryIndexes
 
@@ -373,10 +434,32 @@ func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTa
 		if err != nil {
 			return err
 		}
+		if len(secondaryIndex.Columns) == 1 {
+			reservoirSample := db.getUpdatedReservoirSample(secondaryIndex, colValues[0], numRows)
+			// I have already updated secondaryIndex.ReservoirSample. Is that sufficient to update the struct within db
+			// so that can be utilised during SELECT query?
+			if err := txn.Put(fmt.Sprintf(ReservoirSampleForIndexTemplate, secondaryIndex.IndexName),
+				string(serialiseReservoirSample(reservoirSample))); err != nil {
+				txn.Rollback()
+			}
+		}
 		secondaryIndexKey := getSecondaryIndexKeyOrPrefix(insertIntoTableInput.TableName, secondaryIndex.IndexName, colValues, pkColValue)
-		txn.Put(secondaryIndexKey, "")
+		if err := txn.Put(secondaryIndexKey, ""); err != nil {
+			txn.Rollback()
+		}
 	}
 	return nil
+}
+
+func serialiseReservoirSample(reservoirSample []string) []byte {
+	serialisedSchema := []byte{}
+	serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(len(reservoirSample)))
+
+	for _, sampleElement := range reservoirSample {
+		serialisedSchema = binary.BigEndian.AppendUint32(serialisedSchema, uint32(len(sampleElement)))
+		serialisedSchema = append(serialisedSchema, []byte(sampleElement)...)
+	}
+	return serialisedSchema
 }
 
 func (db *DB) ShowTables() []string {

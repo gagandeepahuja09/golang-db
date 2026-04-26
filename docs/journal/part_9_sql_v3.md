@@ -57,7 +57,7 @@
 - Since table size is every-growing, ensuring random sampling requires some creative solution. This is where **reservior sampling** helps.
 - k: Sample size, N: table size.
 - For the first k numbers, fill them in the list directly.
-- If i > k: generate a random number between 1 and i. Let's call it j. If j < k: replace random_sample[j] with arr[i]. If not, discard it.
+- If i > k: generate a random number between 0 and i. Let's call it j. If j < k: replace random_sample[j] with arr[i]. If not, discard it.
 - So, each number is being randomly check if it is a candidate for being in the random sample list.
 
 #### Reads and Writes Path For Sample Path
@@ -66,7 +66,6 @@
 - Key: col_sample:<table_name>:<column_name>
 - Value: List of numbers in random sample stored in binary encoded manner.
 - Keep on maintaining the list in sorted order.
-- Insertion would be O(N).
 - This list can be persisted to ss-table during flush. Before that, it will be read in-memory only.
 
 ### Read Path

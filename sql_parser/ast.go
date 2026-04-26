@@ -9,8 +9,12 @@ type CreateTable struct {
 }
 
 type SecondaryIndex struct {
-	Columns   []string
-	IndexName string
+	Columns         []string
+	IndexName       string
+	ReservoirSample []string
+	// should we store the reservoir sample for each index here?
+	// so, we will have to update the reservoir sample for each INSERT both in the following in-memory variable and
+	// then also do db.Put for this which is an expensive operation?
 }
 
 type InsertIntoTable struct {
