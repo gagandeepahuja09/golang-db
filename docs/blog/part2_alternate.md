@@ -319,11 +319,11 @@ Since Memtable is already sorted, SSTable creation becomes efficient.
 
 While flushing:
 
-1. Keys are iterated in sorted order.
+1. Memtable keys are iterated in sorted order.
 2. Key-value pairs are written sequentially into data blocks.
 3. Once block size threshold is reached, a new block is started.
 
-A common encoding format is:
+A common encoding format while writing to disk is:
 
 ```text
 [length_of_key][key][length_of_value][value]
@@ -336,9 +336,9 @@ Example:
 ```
 
 Length prefixes are important because:
+> keys and values are variable-sized
 
-* keys and values are variable-sized,
-* readers must know how many bytes to read.
+Indicating length of the key before the start of the key enables readers to know how many bytes to read.
 
 While writing data blocks, we also maintain:
 

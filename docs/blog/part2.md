@@ -37,8 +37,7 @@ As updates increase, the WAL keeps growing while also accumulating stale values.
 
 ### Problem 2: Reads Become Extremely Expensive
 
-Suppose we have 100 GB of WAL data on disk.
-Now imagine serving this query:
+Suppose we have 100 GB of WAL data on disk. Now imagine serving this query:
 ```text
 GET user_987654
 ```
@@ -167,20 +166,174 @@ So we immediately know:
 
 > If `"fox"` exists, it must exist in the block starting with `"dog"`.
 
-Instead of searching the entire SSTable, we reduced the search space to a single block. This is the core idea behind SSTables.
+Instead of searching the entire SSTable, we reduced the search space to a single block. This is the core idea behind SSTables. 
 
-## LSM Trees: Memtable And SSTable
-### Structured file-write to apply binary search
-- To solve for this problem, we divide our file into **data blocks** and also have an **index block**.
-- Index block is the main enabler for applying binary search.
-- The list of key value pairs are written as fixed-size data blocks to disk. Let's take an example to understand better. Let's say that we have sorted keys from "1", "2", "3",  "4", ... till 1000. (value could be anything)
-- Let's assume that this needs to be flushed to disk. We will first divide the keys into fixed size blocks. The logic usually for completing a data block is that it reaches a certain memory, let's say 100 kB.
-- For our example, let's consider that we have data blocks as data block 1: [1 to 100] that is all keys from 1 to 100., data block 2: [101 to 200], data block 3: [201 to 300], ..., data block 10: [901 to 1000].
-- Since we know that all data blocks are sorted within themselves and that all keys in data block N will be greater than all keys in data block N - 1, we can create an index block which just maintains the data block starting keys and their offsets.
-- So, the structure of index block in this case becomes: [ first_key_for_data_block_1, offset_for_data_block_1, first_key_for_data_block_2, offset_for_data_block_2, ] 
-- So, rather than trying to apply binary search within one big file, we have an index block which stores the first key of each of the data-block along with their offsets. So during reads we first go to the index block and pull the entire index block in-memory.
-- While searching for a specific key, once we pull the index-block in memory, we can apply regular binary search to find which should be the applicable data block to search for. This is done by applying a lower bound on the key provided in the input of GET query. Lower bound here means the greatest key within the first key data blocks array which is just less than or equal to the input key. Let's confirm this understanding with the example that we shared earlier. For index data block looking like: [1, 101, 201, ..., 901] and input key = 257, it would return the 201 data block and we can be sure that if our key exists, it should be in the 201 to 300 data block. Hence via binary search, we reduced the search space from 1000 keys to 100 keys per file in the example that we took. 
-- We also need a footer block.
+This leads us to the core lookup rule used in SSTables:
+> Find the largest block-start key less than or equal to the input key.
+
+### SSTable File Layout
+
+A typical SSTable layout looks like this:
+
+```text
++-------------+
+| Data Block 1|
++-------------+
+| Data Block 2|
++-------------+
+| Data Block 3|
++-------------+
+| Index Block |
++-------------+
+| Footer      |
++-------------+
+```
+
+### Why Do We Need A Footer?
+
+Interesting problem:
+> How do we know where the index block starts?
+
+The index block is usually near the end of the file. But during reads, we don't want to scan the entire file just to find it.
+
+So SSTables store a small Footer Block at the end.
+The footer typically contains:
+
+* index block offset,
+* metadata about the SSTable.
+
+This allows readers to directly jump to the index block.
+
+## Write Path
+Now let's connect the intuition with implementation.
+
+### Challenge: How Do We Flush Memtable To SSTable?
+
+When Memtable reaches a threshold size:
+
+* a new SSTable file is created,
+* Memtable contents are written in sorted order,
+* Memtable is reset. 
+* WAL is also reset as the data is now durably stored in disk via SSTable.
+
+Since Memtable is already sorted, SSTable creation becomes efficient.
+
+### Writing Data Blocks
+
+While flushing:
+
+1. Memtable keys are iterated in sorted order.
+2. Key-value pairs are written sequentially into data blocks.
+3. Once block size threshold is reached, a new block is started.
+
+A common encoding format while writing to disk is:
+
+```text
+[length_of_key][key][length_of_value][value]
+```
+
+Example:
+
+```text
+[5][apple][2][10]
+```
+
+Length prefixes are important because:
+> keys and values are variable-sized
+
+Indicating length of the key before the start of the key enables readers to know how many bytes to read.
+
+While writing data blocks, we also maintain:
+
+* block starting key,
+* block offset.
+
+These are later used to build the index block.
+
+### Writing Strategy: Preserving Sequential Writes
+One of the biggest reasons WAL performs well is that it relies on append-only sequential disk writes Interestingly, SSTable creation also preserves this exact property.
+
+During Memtable flush, we create a new SSTable file and then sequentially write:
+1. Data Blocks
+2. Index Block
+3. Footer Block
+
+The overall file structure becomes:
+```text
+    [Data Blocks][Index Block][Footer Block]
+```
+
+Notice something important here:
+> We never modify older parts of the file.
+
+The SSTable is constructed entirely in an append-only fashion. This is extremely efficient because sequential disk writes are significantly cheaper than random writes.
+
+In implementation terms, once the SSTable file is created and opened in append mode:
+
+* data blocks,
+* index block,
+* footer block
+
+are all written sequentially as byte arrays. So even though SSTables solve the problem of efficient reads, they still preserve the append-only write characteristics that made WAL efficient in the first place.
+
+### Writing Index Block And Footer Block
+
+While writing data blocks, we used the following encoding format:
+
+```text
+[length_of_key][key][length_of_value][value]
+```
+
+This encoding becomes important because:
+
+* keys are variable-sized,
+* values are variable-sized,
+* readers must know exactly how many bytes to read from disk.
+
+Without length prefixes, parsing the file correctly would become difficult.
+
+The same principle applies while writing the index block.
+
+Each index block entry stores:
+
+1. the starting key of a data block,
+2. the offset of that block within the SSTable file.
+
+This leads to the following structure:
+
+```text
+[length_of_start_key][start_key][offset]
+```
+
+Notice an important distinction here.
+
+The `start_key` is variable-sized, so we prefix it with its length.
+
+However, `offset` is a fixed-size unsigned 32-bit integer.
+
+Since the size of the offset is already known during reads, we do not need to prefix it with a length.
+
+This leads to an important encoding rule commonly used in storage systems:
+
+> Variable-sized data types usually require length prefixes.
+>
+> Fixed-sized data types usually do not.
+
+The footer block follows the same idea.
+
+Since the footer only stores the index block offset, its structure simply becomes:
+
+```text
+[index_offset]
+```
+
+During reads, this footer allows us to directly jump to the index block without scanning the entire SSTable.
+
+
+
+## Read Path
+
+
 
 ### To be covered in future blogs
 1. Size when memtable should be flushed to ss-table.
@@ -222,3 +375,8 @@ Instead of searching the entire SSTable, we reduced the search space to a single
 #### Application Init
 - List of files.
 - Index blocks and index offsets?
+
+## Note
+- Lots of intricate details around file writes.
+    - Opening file in append-only mode during writing file.
+- Pointed reads at a specific offset within a file.
