@@ -290,50 +290,17 @@ iteratorFunc(func(key, value string) {
 Notice how this single loop handles everything we discussed: length-prefix encoding each entry, accumulating entries into a block buffer, flushing to disk when the block size threshold is exceeded, and tracking the first key and offset for the index block.
 
 ### Writing Strategy: Preserving Sequential Writes
-One of the biggest reasons WAL performs well is that it relies on append-only sequential disk writes Interestingly, SSTable creation also preserves this exact property.
+One of the biggest reasons WAL performs well is that it relies on append-only sequential disk writes. SSTable creation preserves this exact property. During a Memtable flush, we create a new file and write data blocks, then the index block, then the footer. All are written sequentially, never going back to modify earlier parts of the file:
 
-During Memtable flush, we create a new SSTable file and then sequentially write:
-1. Data Blocks
-2. Index Block
-3. Footer Block
-
-The overall file structure becomes:
 ```text
     [Data Blocks][Index Block][Footer Block]
 ```
 
-Notice something important here:
-> We never modify older parts of the file.
-
-The SSTable is constructed entirely in an append-only fashion. This is extremely efficient because sequential disk writes are significantly cheaper than random writes.
-
-In implementation terms, once the SSTable file is created and opened in append mode:
-
-* data blocks,
-* index block,
-* footer block
-
-are all written sequentially as byte arrays. So even though SSTables solve the problem of efficient reads, they still preserve the append-only write characteristics that made WAL efficient in the first place.
+So even though SSTables solve the problem of efficient reads, they still preserve the append-only write pattern that made WAL fast in the first place.
 
 ### Writing Index Block And Footer Block
 
-While writing data blocks, we used the following encoding format:
-
-```text
-[length_of_key][key][length_of_value][value]
-```
-
-This encoding becomes important because:
-
-* keys are variable-sized,
-* values are variable-sized,
-* readers must know exactly how many bytes to read from disk.
-
-Without length prefixes, parsing the file correctly would become difficult.
-
-The same principle applies while writing the index block.
-
-Each index block entry stores:
+Using the same length-prefix encoding from data blocks, each index block entry stores:
 
 1. the starting key of a data block,
 2. the offset of that block within the SSTable file.
@@ -409,7 +376,6 @@ As soon as the key is found, the search stops.
 ### Challenge: How Do We Search Efficiently Inside An SSTable?
 
 Naively reading:
-
 * footer,
 * then index block,
 * during every query
@@ -425,60 +391,128 @@ This makes reads significantly faster.
 
 ### Searching Inside A File
 
-Once index block is in memory:
+Once the index block is in memory, searching an SSTable for a key involves four steps:
 
-1. Binary search index block.
-2. Find candidate data block.
-3. Read only that block from disk.
-4. Search within that smaller block.
+**Step 1: Binary search the index block.** We use the same "largest key less than or equal to the input" rule from earlier.
 
-Important distinction:
+**Step 2: Calculate the exact byte range to read.** Once we know which data block to search, we need to figure out: 
+    * where it starts and 
+    * ends on disk. 
+The start offset comes directly from the matched index entry. The end offset comes from the *next* index entry's offset. Or if this is the last data block, the end offset is the start of the index block itself (which we already stored in memory during startup).
 
-> We are not binary searching the entire file.
+**Step 3: Read only that one block from disk.** This is the key insight. We use `file.ReadAt()` golang function to read exactly the bytes between the start and end offsets. We are not reading the entire file. We are not even reading from the beginning of the file. We jump directly to the relevant block.
 
-We are:
+**Step 4: Sequential scan within the block.** Once the block is in memory, we decode entries one by one using the length-prefix format. Which is to: 
+    * read the key length, 
+    * read that many bytes for the key, 
+    * read the value length, 
+    * read that many bytes for the value
+    * and then check if the key matches.
 
-* binary searching the in-memory index,
-* then reading a much smaller disk block.
+Here is the `Get()` function from our implementation (`sstable/sstable.go`):
 
-This dramatically reduces disk IO.
+```go
+func (st *SsTable) Get(key string) (string, error) {
+	// newest file to oldest file
+	for i := len(st.firstLevelFiles) - 1; i >= 0; i-- {
+		file := st.firstLevelFiles[i]
+		ssTableIndex := st.indexBlocks[i]
+		lowerBoundSliceIndex := getLowerBound(key, ssTableIndex)
+		if lowerBoundSliceIndex == -1 {
+			continue
+		}
+		endOffset := st.indexOffsets[i]
+		if lowerBoundSliceIndex < len(ssTableIndex)-1 {
+			endOffset = ssTableIndex[lowerBoundSliceIndex+1].offset
+		}
+		value, err := st.getValueFromSsTableDataBlock(file, key,
+			ssTableIndex[lowerBoundSliceIndex].offset, endOffset)
+		if value == "" && err == nil {
+			continue
+		}
+		return value, err
+	}
+	return "", nil
+}
+```
 
-Add code references here and also show how we avoid reading the entire file by specifying the exact block we need to read.
+A few things to notice:
+
+* **Reverse iteration** (`len - 1` down to `0`): Newest files are searched first so that the most recent value for a key is found first.
+* **`getLowerBound` returning `-1`**: The key is smaller than every block-start key in this file. No point reading any block, so we `continue` to the next file.
+* **`endOffset` calculation**: If the matched block is the last data block, the end offset defaults to `indexOffsets[i]`: the start of the index block. Otherwise, it uses the next index entry's offset. This gives us the precise byte range for the block we need to read.
+* **`continue` on empty value with no error**: The key wasn't found in this file's candidate block, so we try the next (older) file.
+
+If we exhaust all files without finding the key, `Get()` returns an empty string with no error — the key simply doesn't exist in the database.
 
 ## Application Startup
-During application initialization, databases typically load:
 
-* list of SSTable files,
-* SSTable metadata,
-* index block information.
+When the database process starts, it needs to reconstruct enough state to serve reads immediately. This happens in three steps:
 
-This avoids repeated filesystem scans during reads.
+**1. Scan the SSTable data directory.** The database reads all `.log` files from the data directory.
 
-Problems Still Remaining
+**2. Open all SSTable files.** File handles are opened once during startup and kept open for the lifetime of the process. This avoids the overhead of repeatedly opening and closing files on every read.
 
-At this point, we have solved:
+**3. Pre-build all index blocks into memory.** For each file, the database reads the footer (last 4 bytes) to get the index block offset, then reads the index block bytes from that offset to the footer, and parses them into in-memory structs. This is the `buildIndexes()` call in our implementation.
 
-* Durable writes via WAL
-* Fast in-memory writes via Memtable
-* Efficient disk lookups via SSTables
+Here's `buildIndexFromFile`, which does the heavy lifting:
 
-But major problems still remain.
+```go
+func (st *SsTable) buildIndexFromFile(file *os.File) (int, []indexBlockEntry, error) {
+	info, err := os.Stat(file.Name())
+	if err != nil {
+		return 0, nil, err
+	}
+	fileSize := info.Size()
+	indexOffset, err := st.getIndexOffset(file)
+	if err != nil {
+		return 0, nil, err
+	}
 
-As writes continue:
+	indexBlockLength := (fileSize - 4) - int64(indexOffset)
+	indexBlockBuf := make([]byte, indexBlockLength)
+	if _, err = file.ReadAt(indexBlockBuf, int64(indexOffset)); err != nil {
+		return 0, nil, err
+	}
 
-* SSTables keep increasing,
-* duplicate keys accumulate,
-* reads become slower because multiple files must be searched.
+	ssTableIndex := []indexBlockEntry{}
+	for i := 0; i < int(indexBlockLength); {
+		keyLengthBuf := indexBlockBuf[i : i+4]
+		keyLength := binary.BigEndian.Uint32(keyLengthBuf)
 
-This leads us to:
+		i += 4
+		key := string(indexBlockBuf[i : i+int(keyLength)])
 
-* Compaction
-* Multi-level LSM Trees
-* Read Amplification
+		i += int(keyLength)
+		offsetBuf := indexBlockBuf[i : i+4]
+		offset := binary.BigEndian.Uint32(offsetBuf)
 
-which we will cover in the next part.
+		ssTableIndex = append(ssTableIndex, indexBlockEntry{key: key, offset: int(offset)})
+		i += 4
+	}
+	return int(indexOffset), ssTableIndex, nil
+}
+```
 
-Also, few more important topics within storage layer which will be covered later:
-* Bloom filters within SSTable to easily come to know if a key definitely doesn't exist.
-* Coming up with the appropriate flush size by evaluating tradeoffs.
-* Coming up with the appropriate data block size within SSTable by evaluating tradeoffs.
+- **Footer read**: `getIndexOffset` reads the last 4 bytes to find where the index block starts.
+- **Precise byte range**: reads exactly the bytes between `indexOffset` and `fileSize - 4`: no more, no less.
+- **Same length-prefix decoding**: the loop mirrors the data block decoding pattern: 4-byte key length, key bytes, 4-byte offset and builds the in-memory index entry by entry.
+
+After these three steps, the database is ready to serve reads. This is also why the `Get()` function shown earlier can binary search the index block without any disk IO. The index was already loaded into memory at startup. The only disk read during a query is for the single data block that might contain the key.
+
+## What's Next
+
+At this point, we have a working storage engine. WAL gives us durability. Memtable gives us fast in-memory writes with sorted ordering. SSTables give us efficient disk lookups using index blocks and binary search. And on startup, all the index blocks are pre-loaded so that reads only touch disk for the one data block that matters.
+
+But several problems remain:
+
+* **SSTable files keep growing.** Every Memtable flush creates a new file. Over time, the number of files on disk keeps increasing.
+* **Duplicate keys accumulate across files.** If a key is updated 100 times, 100 different SSTable files may contain a value for it. Only the newest matters. The rest are wasted space.
+* **Reads slow down.** Every `Get()` call may need to search through more and more files before finding the key (or confirming it doesn't exist).
+* **Deletes don't exist yet.** In an append-only system, what does "delete" even mean? We can't go back and erase a key from an already-written SSTable file.
+
+In upcoming parts, we will cover:
+* **Compaction**: *to be covered in part 3*: merging multiple SSTables into fewer, larger ones, eliminating duplicates and reclaiming space.
+* **Tombstones**: a way to represent deletes in an append-only world.
+* **Bloom filters**: a probabilistic data structure that lets us skip SSTable files that definitely don't contain a key, without reading anything from them.
+* **Tuning flush size and block size**: how large should the Memtable grow before flushing? How large should each data block be? These are not arbitrary choices and involve careful tradeoffs.
