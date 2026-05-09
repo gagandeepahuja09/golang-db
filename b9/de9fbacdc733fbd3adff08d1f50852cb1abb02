@@ -1,0 +1,42 @@
+docs/blog/part2.md
+  s_088b8a3d9e8fa7::t_79eb7344aba55b 303
+  s_088b8a3d9e8fa7::t_5a98745cd08c04 517
+  s_0af67f5d82dcf7::t_4f50b57c14e529 458,460-495,497
+  s_088b8a3d9e8fa7::t_ed83200535edd9 394,396,412,414-437,439-441,444-446
+  s_088b8a3d9e8fa7::t_f0814d528e09c8 450,454,456
+  s_0af67f5d82dcf7::t_8da2f78db46feb 299
+  s_ccecce976bd9d6::t_3db8b586c69e93 452
+  s_088b8a3d9e8fa7::t_1d352aa934dc62 503,505,507,509,511-512,516
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "b9de9fbacdc733fbd3adff08d1f50852cb1abb02",
+  "prompts": {},
+  "sessions": {
+    "s_088b8a3d9e8fa7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b6dc6f1a-a58c-4a53-8cf0-5c108d849520",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    },
+    "s_0af67f5d82dcf7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6de417b2-e7e4-403b-8ac3-0511d871b935",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    },
+    "s_ccecce976bd9d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "936c1cd6-19de-4b9c-a3ba-7d23582ee592",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    }
+  }
+}

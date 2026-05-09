@@ -1,4 +1,0 @@
-docs/blog/part2.md
-  6de417b2-e7e4-403b-8ac3-0511d871b935:2026-05-09T16:21:21.423Z 299,303,394,396,398-401,403,405-410,412,414-437,439,441-444,446,450,452,454,456,458,460-470,472-476,478-481,483-484,486-488,490-495,497-499,501,503,505,507,509-512,514-518
----
-{"schema_version": "authorship/3.0.0", "base_commit_sha": "HEAD~1", "prompts": {"6de417b2-e7e4-403b-8ac3-0511d871b935:2026-05-09T16:21:21.423Z": {"agent_id": {"tool": "claude_code", "model": ""}, "human_author": "gagandeep.ahuja@razorpay.com", "accepted_lines": 98, "overriden_lines": 0}}}
