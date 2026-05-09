@@ -1,0 +1,32 @@
+docs/blog/part2_alternate.md
+  ai_agent 362
+docs/blog/part2.md
+  s_876a34b7ec3e9a::t_540ab6ade2c898 171-173
+  s_876a34b7ec3e9a::t_49329605f0490d 69-70
+  s_cd68b8752eb694::t_73ce141ae4f268 103
+  s_876a34b7ec3e9a::t_f150c708f7d1c3 257-291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "11837c8988d87c969505f2ba848b0211058b6ab4",
+  "prompts": {},
+  "sessions": {
+    "s_876a34b7ec3e9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b366efa9-8137-46c0-8914-8e8f52632e20",
+        "model": "unknown"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    },
+    "s_cd68b8752eb694": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ec21eaa1-470e-4638-a144-a37b415e6805",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    }
+  }
+}

@@ -1,5 +1,0 @@
-docs/blog/part2.md
-  ec21eaa1-470e-4638-a144-a37b415e6805:2026-05-09T13:45:06.105Z 70,103,171,173,257,259-279,281-287,290
-  ec21eaa1-470e-4638-a144-a37b415e6805:2026-05-09T13:44:00.268Z 288
----
-{"schema_version": "authorship/3.0.0", "base_commit_sha": "HEAD~1", "prompts": {"ec21eaa1-470e-4638-a144-a37b415e6805:2026-05-09T13:45:06.105Z": {"agent_id": {"tool": "claude_code", "model": ""}, "human_author": "gagandeep.ahuja@razorpay.com", "accepted_lines": 37, "overriden_lines": 0}, "ec21eaa1-470e-4638-a144-a37b415e6805:2026-05-09T13:44:00.268Z": {"agent_id": {"tool": "claude_code", "model": ""}, "human_author": "gagandeep.ahuja@razorpay.com", "accepted_lines": 37, "overriden_lines": 0}}}
