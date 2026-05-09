@@ -65,7 +65,9 @@ Binary search is trivial in memory. Arrays support:
 * constant-time jumps,
 * cheap random access.
 
-Disk files do not naturally behave like arrays. So the real challenge becomes:
+Disk files do not naturally behave like arrays. The fundamental reason is that entries are variable-length. In an array, every element is the same size, so computing the position of the Nth element is trivial. But in a disk file storing key-value pairs, each entry can be a different size. Without reading and parsing every entry before it, there is no way to know where the Nth entry begins.
+
+So the real challenge becomes:
 > How do we structure data on disk such that binary search becomes possible?
 
 This is exactly what LSM Trees solve using:
@@ -98,7 +100,7 @@ But applying binary search directly on one huge disk file is still not straightf
 
 ### How SSTables Are Structured
 
-Instead of storing one massive blob of sorted data, SSTables divide data into smaller blocks.Typically:
+Instead of storing one massive blob of sorted data, SSTables divide data into smaller blocks. Typically:
 * each block is bounded by size (for example ~100 KB),
 * keys inside each block remain sorted.
 
@@ -166,7 +168,9 @@ So we immediately know:
 
 > If `"fox"` exists, it must exist in the block starting with `"dog"`.
 
-Instead of searching the entire SSTable, we reduced the search space to a single block. This is the core idea behind SSTables. 
+Instead of searching the entire SSTable, we reduced the search space to a single block. This is the core idea behind SSTables.
+
+Once the correct block is found, entries within the block are scanned sequentially. Each entry is decoded using its length prefix: read the key length, read that many bytes for the key, read the value length, read that many bytes for the value, and repeat. This sequential scan within a single block is fast because blocks are small (typically ~100 KB).
 
 This leads us to the core lookup rule used in SSTables:
 > Find the largest block-start key less than or equal to the input key.
@@ -250,6 +254,41 @@ While writing data blocks, we also maintain:
 
 These are later used to build the index block.
 
+Here is the core loop from our implementation (`sstable/sstable.go`) that writes data blocks:
+
+```go
+iteratorFunc(func(key, value string) {
+    if blockFirstKey == "" {
+        blockFirstKey = key
+    }
+    // [length_of_key][key][length_of_value][value]
+    ssTableEntryBuf := []byte{}
+    ssTableEntryBuf = binary.BigEndian.AppendUint32(ssTableEntryBuf, uint32(len(key)))
+    ssTableEntryBuf = append(ssTableEntryBuf, []byte(key)...)
+    ssTableEntryBuf = binary.BigEndian.AppendUint32(ssTableEntryBuf, uint32(len(value)))
+    ssTableEntryBuf = append(ssTableEntryBuf, []byte(value)...)
+    offset += len(ssTableEntryBuf)
+    blockLength += len(ssTableEntryBuf)
+    ssTableBlockBuf = append(ssTableBlockBuf, ssTableEntryBuf...)
+    if blockLength > st.blockLength {
+        // one data block completed
+        indexBlock = append(indexBlock, indexBlockEntry{
+            key:    blockFirstKey,
+            offset: blockStartOffset,
+        })
+        file.Write(ssTableBlockBuf)
+
+        // start new block
+        blockStartOffset = offset
+        blockFirstKey = ""
+        blockLength = 0
+        ssTableBlockBuf = []byte{}
+    }
+})
+```
+
+Notice how this single loop handles everything we discussed: length-prefix encoding each entry, accumulating entries into a block buffer, flushing to disk when the block size threshold is exceeded, and tracking the first key and offset for the index block.
+
 ### Writing Strategy: Preserving Sequential Writes
 One of the biggest reasons WAL performs well is that it relies on append-only sequential disk writes Interestingly, SSTable creation also preserves this exact property.
 
@@ -329,54 +368,117 @@ Since the footer only stores the index block offset, its structure simply become
 
 During reads, this footer allows us to directly jump to the index block without scanning the entire SSTable.
 
-
-
 ## Read Path
 
+### Problem: A Key Can Exist In Multiple Places
+An interesting property of LSM Trees is that the same key can exist:
+- in Memtable,
+- in multiple SSTables,
+- and potentially with different values.
 
+This happens because updates do not immediately overwrite older values on disk.
 
-### To be covered in future blogs
-1. Size when memtable should be flushed to ss-table.
-2. Data-block size.
+For example:
 
-### Implementation Details
-#### Write Path
-##### Memtable Write
+```text
+PUT user_1 Alice
+PUT user_1 Charlie
+PUT user_1 David
+````
 
-##### Flush Memtable To SS-Table
-- Code reference: `flushMemtableToSsTable` function.
-- The memtable to ss-table flush happens on a periodic basis, depending on the size of memtable.
-- During flush, the ss-table write is done in a new file basis the ss-table file structure we discussed.
-- This involves iterating through each memtable key in sorted order and writing data blocks. The strategy for writing data blocks is to define the max data block size and once that size is reached, we complete the data block write. We maintain the index block in-memory during data block write such that it can be written after data block write.
-- **Blocks writing strategy: "[Data block 1][Data block 2]...[Data block N][Index block][Footer block]"**
-    - **Data Blocks**
-        - While writing a single data block, we write each of the key value pairs sequentially into the file in the format: [length_of_key][key][length_of_value][value].
-        - As we covered in the first part of the block, it is important to prefix with length of the key to understand the length of key during read before writing to disk.
-        - While writing to data block, we also need to maintain the start key for each data block and offset for each start key which is important for writing index block.
-    - **Index Block**
-        - All of the details: pair of starting keys and offset for writing index block are maintained while writing to data blocks. 
-    - **Footer Block**
-        - Footer block is necessary to identify the index offset, so that during file read we can directly reach the index block rather than requiring to read the entire file.
+Older SSTables may still contain stale values:
 
-#### Read Path
-- During `GET key`, the first check is done within the memtable. If the key is not found in memtable, we check ss-table.
-- **Which file to search?**
-    - During ss-table read, it is important to realise that even while writing to ss-table, it is possible that there are repeat keys. This will majorly happen due to updates where `PUT key value` operation is fired multiple times for the same key.
-    - Due to this, the same key can reside in multiple ss-table files and in such cases, we honour the key in the newest file and don't read the key from older files.
-    - To solve for this, it is important to maintain a monotonically increasing file name during writes like `file_<id>` where id is auto-incrementing number. This means that file_100 was created after file_25.
-    - Hence, the read strategy becomes to read from the newest file to the oldest file. As soon as we find a key, we stop the search.
-    - **How to get all files?**
-        - For simplicity, we can take an approach where we read all files to a specific directory and read the directory stats during application init. 
-        - This means that during each flush to ss-table, we also should update the files list in-memory so that we don't need to fetch the list during every read.
-- **Search within a file**
-    - When reading a specific file, we need to find the index block. This requires going through the footer block, which is towards the end of the file, finding the index offset and then reading the entire index block in-memory. Rather than going through all of these steps sequentially during each read, we can precompute and store the index-block in-memory so that we avoid above repetitive read operation in each of the files during each of the reads.
-    - Once we have index block in-memory,  
+```text
+SSTable 1 -> user_1 = Alice
+SSTable 2 -> user_1 = Charlie
+Memtable  -> user_1 = David
+```
 
-#### Application Init
-- List of files.
-- Index blocks and index offsets?
+During reads, only the latest value matters.
 
-## Note
-- Lots of intricate details around file writes.
-    - Opening file in append-only mode during writing file.
-- Pointed reads at a specific offset within a file.
+So while serving a `GET key` query, the database must search in an order that guarantees the newest value is found first.
+
+This leads to the following mental model for reads:
+
+```text
+Memtable -> Newest SSTable -> Older SSTables
+```
+
+As soon as the key is found, the search stops.
+
+### Challenge: How Do We Search Efficiently Inside An SSTable?
+
+Naively reading:
+
+* footer,
+* then index block,
+* during every query
+would still create repeated disk reads.
+
+So databases usually cache:
+* index blocks,
+* metadata,
+* file handles
+in memory.
+
+This makes reads significantly faster.
+
+### Searching Inside A File
+
+Once index block is in memory:
+
+1. Binary search index block.
+2. Find candidate data block.
+3. Read only that block from disk.
+4. Search within that smaller block.
+
+Important distinction:
+
+> We are not binary searching the entire file.
+
+We are:
+
+* binary searching the in-memory index,
+* then reading a much smaller disk block.
+
+This dramatically reduces disk IO.
+
+Add code references here and also show how we avoid reading the entire file by specifying the exact block we need to read.
+
+## Application Startup
+During application initialization, databases typically load:
+
+* list of SSTable files,
+* SSTable metadata,
+* index block information.
+
+This avoids repeated filesystem scans during reads.
+
+Problems Still Remaining
+
+At this point, we have solved:
+
+* Durable writes via WAL
+* Fast in-memory writes via Memtable
+* Efficient disk lookups via SSTables
+
+But major problems still remain.
+
+As writes continue:
+
+* SSTables keep increasing,
+* duplicate keys accumulate,
+* reads become slower because multiple files must be searched.
+
+This leads us to:
+
+* Compaction
+* Multi-level LSM Trees
+* Read Amplification
+
+which we will cover in the next part.
+
+Also, few more important topics within storage layer which will be covered later:
+* Bloom filters within SSTable to easily come to know if a key definitely doesn't exist.
+* Coming up with the appropriate flush size by evaluating tradeoffs.
+* Coming up with the appropriate data block size within SSTable by evaluating tradeoffs.

@@ -359,7 +359,7 @@ The overall write structure becomes:
 
 ---
 
-# Interesting Problem: What If The Same Key Exists In Multiple SSTables?
+# How To Identify The Source Of Truth If The Same Key Exists In Multiple SSTables?
 
 Suppose:
 
