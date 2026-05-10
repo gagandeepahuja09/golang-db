@@ -90,11 +90,33 @@
 - **Range queries** would be solved later.   
 - There might also be cases where choosing an index is not necessary.
 
-### Implementation Plan
+### Implementation and UT Plan
 - Need to think about the test cases. Need to take a case where multiple secondary indexes are possible.
 - AND should have atleast 2 conditions
+- Create a table
+    - Insert 500 rows --> 100k rows --> add two AND conditions. 
+    - Create 2 separate indexes.
+    - Assert that the correct index was picked by the query planner.
+- Todo: Force usage of the slower index and then check performance.
 
 #### Next Steps
 - We don't yet have range query support, especially with indexes.
 - We need to solve for composite indexes case, what happens to query planner in that case?
 - As of now, we are also not supporting data type based sorting. Sorting is generic based on strings. Which would mean "100" < "11" but that won't work for integer data types.
+
+## Range Queries Via Primary Key And Secondary Index
+- As of now, we are only supporting pointed PK and secondary index queries when we have some "=" condition.
+- Let's revise PK and secondary index.
+- PK: GET key with PK present in key.
+- Secondary index: Prefix scan where secondary index name and value is in index: you get N different PK rows.
+- Range query: Critical thing is to take care of both just less or greater condition and less than or equal to and greater than or equal to condition.
+- While reading from SSTable, when we have two conditions, it could be in two different data blocks.
+- Solving for conditions not having "equal to": GET input_key value was sorted: always largest key less than or equal to input_key.
+- Solving for less than means: assume key starts as "1 6 11 18"
+    - If we have less than 10, we need to search for data block 1 and 6
+    - So, now ssTable logic needs to change. A different function for less than condition.
+    - Rather than reading specifically for one data block, read from start till the block found in case of less than condition.
+    - In case of greater than, do from found till end.
+    - In case of both conditions, apply binary search twice and utilise both blocks.
+    - We also need to go through each file from newest to oldest now. We can't stop at the newest file when a key is found. But while collecting results, we need to be careful that for the same primary key, we treat the newest one as the source of truth.
+    - New Memtable functions would also be required. 

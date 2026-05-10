@@ -409,7 +409,7 @@ func (db *DB) getUpdatedReservoirSample(secondaryIndex sqlparser.SecondaryIndex,
 		secondaryIndex.ReservoirSample = []string{}
 	}
 
-	if numRows < ReservoirSampleSize {
+	if numRows <= ReservoirSampleSize {
 		secondaryIndex.ReservoirSample = append(secondaryIndex.ReservoirSample, colValue)
 		slices.Sort(secondaryIndex.ReservoirSample)
 		// todo: need to evaluate if it makes more sense to sort during WRITE or READ.
@@ -418,7 +418,7 @@ func (db *DB) getUpdatedReservoirSample(secondaryIndex sqlparser.SecondaryIndex,
 	}
 
 	randNum := rand.IntN(ReservoirSampleSize)
-	if randNum < numRows {
+	if randNum < ReservoirSampleSize {
 		secondaryIndex.ReservoirSample[randNum] = colValue
 		slices.Sort(secondaryIndex.ReservoirSample)
 	}
@@ -429,15 +429,14 @@ func (db *DB) updateSecondaryIndexes(insertIntoTableInput sqlparser.InsertIntoTa
 	table := db.tableNameVsSchemaMap[insertIntoTableInput.TableName]
 	secondaryIndexes := table.SecondaryIndexes
 
-	for _, secondaryIndex := range secondaryIndexes {
+	for i, secondaryIndex := range secondaryIndexes {
 		colValues, pkColValue, err := db.getIndexAndPrimaryKeyColumnValuesInIndexSequence(secondaryIndex.Columns, insertIntoTableInput)
 		if err != nil {
 			return err
 		}
 		if len(secondaryIndex.Columns) == 1 {
 			reservoirSample := db.getUpdatedReservoirSample(secondaryIndex, colValues[0], numRows)
-			// I have already updated secondaryIndex.ReservoirSample. Is that sufficient to update the struct within db
-			// so that can be utilised during SELECT query?
+			db.tableNameVsSchemaMap[insertIntoTableInput.TableName].SecondaryIndexes[i].ReservoirSample = reservoirSample
 			if err := txn.Put(fmt.Sprintf(ReservoirSampleForIndexTemplate, secondaryIndex.IndexName),
 				string(serialiseReservoirSample(reservoirSample))); err != nil {
 				txn.Rollback()
