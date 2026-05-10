@@ -33,12 +33,52 @@ func (db *DB) getRowForPrimaryKey(tableName, primaryKeyId string) ([]string, err
 	return rowValues, nil
 }
 
+// 1 2 [3] 3 3 5
+// F F T   T T T
+func getLowerBound(arr []string, value string) int {
+	low := 0
+	high := len(arr) - 1
+	lowerBound := -1
+	for low <= high {
+		mid := low + (high-low)/2
+		if arr[mid] >= value {
+			lowerBound = mid
+			high = mid - 1
+		} else {
+			low = mid + 1
+		}
+	}
+	return lowerBound
+}
+
+// 1 2 3 3 [3] 5
+// T T T T T   F
+func getUpperBound(arr []string, value string) int {
+	low := 0
+	high := len(arr) - 1
+	upperBound := -1
+	for low <= high {
+		mid := low + (high-low)/2
+		if arr[mid] <= value {
+			upperBound = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	return upperBound
+}
+
 // go through each secondary index. check if any of the secondary index can independently cover all WHERE conditions
 // if not ALL conditions, check if some of the conditions from the prefix of the WHERE condition can be covered.
 // returns nil if no secondary index is applicable
+// now, rather than choosing the first possible index which satisfies prefix, check the index which will have the least cost.
 func getSecondaryIndexForQueryIfApplicable(selectFromTableInput sqlparser.SelectFromTable, secondaryIndexes []sqlparser.SecondaryIndex) (*sqlparser.SecondaryIndex, []string) {
 	var candidateSecondaryIndex *sqlparser.SecondaryIndex
 	colsCoveredInCandidateSecondaryIndex := []string{}
+	minNumRows := -1
+	var secondaryIndexWithMinNumRows *sqlparser.SecondaryIndex
+	colsCoveredInSecondaryIndexWithMinNumRows := []string{}
 	for _, secondaryIndex := range secondaryIndexes {
 		secIdxColsCoveredFromInputQuery := []string{}
 		for _, secIdxCol := range secondaryIndex.Columns {
@@ -46,7 +86,24 @@ func getSecondaryIndexForQueryIfApplicable(selectFromTableInput sqlparser.Select
 			for _, qc := range selectFromTableInput.QueryConditions {
 				if qc.ColumnName == secIdxCol {
 					colFoundInInputQuery = true
-					break
+					if qc.QueryType == sqlparser.Equals {
+						// apply both lower bound and upper bound check
+						// less than or equal to qc.Value
+						// greater than or equal to qc.Value
+						// unsure if secondaryIndex.ReservoirSample would have the updated value
+						firstOccurence := getLowerBound(secondaryIndex.ReservoirSample, qc.Value)
+						lastOccurence := getUpperBound(secondaryIndex.ReservoirSample, qc.Value)
+						estimatedNumRows := firstOccurence - lastOccurence + 1
+						if firstOccurence == -1 {
+							estimatedNumRows = 0
+						}
+						if estimatedNumRows < minNumRows {
+							minNumRows = estimatedNumRows
+							secondaryIndexWithMinNumRows = &secondaryIndex
+							colsCoveredInSecondaryIndexWithMinNumRows = []string{secIdxCol}
+						}
+					}
+					// todo: support for range queries not yet added
 				}
 			}
 			if colFoundInInputQuery {
@@ -67,6 +124,9 @@ func getSecondaryIndexForQueryIfApplicable(selectFromTableInput sqlparser.Select
 				colsCoveredInCandidateSecondaryIndex = secIdxColsCoveredFromInputQuery
 			}
 		}
+	}
+	if secondaryIndexWithMinNumRows != nil {
+		return secondaryIndexWithMinNumRows, colsCoveredInSecondaryIndexWithMinNumRows
 	}
 	return candidateSecondaryIndex, colsCoveredInCandidateSecondaryIndex
 }

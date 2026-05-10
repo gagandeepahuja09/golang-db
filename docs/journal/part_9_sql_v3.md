@@ -69,17 +69,32 @@
 - This list can be persisted to ss-table during flush. Before that, it will be read in-memory only.
 
 ### Read Path
-- Once we have the sorted list for a column value, give a range query like WHERE c1 >= 100 AND c1 <= 1000.
+- Once we have the sorted list for a column value, given a range query like `WHERE c1 >= 100 AND c1 <= 1000`.
 - For greater condition, find the first occurence of 100 in the sorted list. (similar to lower bound)
 - For less condition, find the last occurrence of 1000 in the sorted list. (similar to upper bound)
 - Both these actions can be done via binary search.
 - One we get the estimate of the range, we can apply a formula like (range_of_sample) * (table_size / sample_size) to get an estimate.
 - Note: We also need to store the table_size now as stats.
 - That way we don't need to really think about maintaining buckets.
+- c1 = 500
+    - Find the first occurence of c1 = 500
+    - Find the last occurence of c1 = 500
+- c1 >= 100 and c1 <= 1000
+    - Find the first occurence of c1 = 100
+    - Find the last occurence of c1 = 1000
+- c1 > 100 and c1 < 1000
+    - Find the first occurence of c1 > 100
+    - Find the last occurence of c1 < 1000
+- Need to create a generic binary search function which covers all these cases.
 
 - **Range queries** would be solved later.   
 - There might also be cases where choosing an index is not necessary.
 
+### Implementation Plan
+- Need to think about the test cases. Need to take a case where multiple secondary indexes are possible.
+- AND should have atleast 2 conditions
+
 #### Next Steps
 - We don't yet have range query support, especially with indexes.
 - We need to solve for composite indexes case, what happens to query planner in that case?
+- As of now, we are also not supporting data type based sorting. Sorting is generic based on strings. Which would mean "100" < "11" but that won't work for integer data types.
