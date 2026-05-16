@@ -71,25 +71,8 @@ So the real challenge becomes:
 > How do we structure data on disk such that binary search becomes possible?
 
 This is exactly what LSM Trees solve using:
-* Memtables
-* SSTables
-
-## Memtable: Fast In-Memory Writes
-A Memtable is simply an in-memory sorted map. Whenever writes arrive:
-1. They are appended to WAL for durability.
-2. They are inserted into Memtable for fast reads/writes.
-
-Because Memtable is sorted, keys are always maintained in order. Example:
-```text
-apple   -> 10
-banana  -> 20
-cat     -> 30
-dog     -> 40
-```
-
-But we cannot keep growing Memtable forever because RAM is limited. So eventually:
-
-> Memtable is flushed to disk as an SSTable.
+* SSTables (on disk)
+* Memtables (in memory)
 
 ## SSTable: Making Disk Reads Efficient
 SSTable stands for `Sorted String Table`.
@@ -108,19 +91,19 @@ Example:
 
 ```text
 Data Block 1:
-[apple]
-[banana]
-[cat]
+[user_1]
+[user_2]
+[user_3]
 
 Data Block 2:
-[dog]
-[elephant]
-[fox]
+[user_4]
+[user_5]
+[user_6]
 
 Data Block 3:
-[monkey]
-[tiger]
-[zebra]
+[user_7]
+[user_8]
+[user_9]
 ```
 
 Notice something important:
@@ -139,15 +122,15 @@ Each SSTable also contains an Index Block. The index block stores:
 Example:
 
 ```text
-apple  -> offset 0
-dog    -> offset 1024
-monkey -> offset 2048
+user_1 -> offset 0
+user_4 -> offset 1024
+user_7 -> offset 2048
 ```
 
 Now suppose we want:
 
 ```text
-GET fox
+GET user_5
 ```
 
 We first load the index block into memory.
@@ -155,18 +138,18 @@ We first load the index block into memory.
 Then we binary search the block-start keys:
 
 ```text
-apple, dog, monkey
+user_1, user_4, user_7
 ```
 
-The largest key less than or equal to `"fox"` is:
+The largest key less than or equal to `"user_5"` is:
 
 ```text
-dog
+user_4
 ```
 
 So we immediately know:
 
-> If `"fox"` exists, it must exist in the block starting with `"dog"`.
+> If `"user_5"` exists, it must exist in the block starting with `"user_4"`.
 
 Instead of searching the entire SSTable, we reduced the search space to a single block. This is the core idea behind SSTables.
 
@@ -207,6 +190,34 @@ The footer typically contains:
 * metadata about the SSTable.
 
 This allows readers to directly jump to the index block.
+
+## Memtable: How Data Enters the SSTable
+
+SSTables require their keys to be sorted. So how does data get into an SSTable in sorted order?
+
+This is where the Memtable comes in. A Memtable is simply an in-memory sorted map.
+
+**In-memory** means we are bounded by RAM. We cannot keep writing to memory indefinitely. At some point, data must be written to disk.
+
+**Sorted** is what makes the flush to disk efficient. Because the Memtable maintains keys in order, when it is time to write an SSTable, the data is already sorted. There is no need for an expensive sort step. The Memtable simply iterates its keys in order and writes them out sequentially.
+
+> The primary purpose of keeping the Memtable sorted is not to speed up reads. It is to make the flush to SSTable efficient.
+
+Whenever writes arrive:
+1. They are appended to WAL for durability.
+2. They are inserted into Memtable for fast reads/writes.
+
+Because Memtable is sorted, keys are always maintained in order. Example:
+```text
+user_1  -> Alice
+user_2  -> Bob
+user_3  -> Charlie
+user_4  -> David
+```
+
+But we cannot keep growing Memtable forever because RAM is limited. So eventually:
+
+> Memtable is flushed to disk as an SSTable.
 
 ## Write Path
 Now let's connect the intuition with implementation.
