@@ -1,0 +1,32 @@
+docs/blog/part2.md
+  s_e8698f8f563a42::t_ac1499cd0f964b 94-96,99-101,104-106
+  s_e8698f8f563a42::t_d8a8d5516f3a03 125-127
+  s_83616da40826de::t_d0cf45f0112aa0 194-211,216-221
+  s_e8698f8f563a42::t_e3a0329f36d7ac 212-215
+  s_83616da40826de::t_453080ab0331b4 74-75
+  s_e8698f8f563a42::t_62ad1129815610 133,141,144,147,152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "f99c2cd40e9ed984f28da441af878f8783cf3c79",
+  "prompts": {},
+  "sessions": {
+    "s_83616da40826de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "46843d6c-7f10-4f20-842c-81281f63fac8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    },
+    "s_e8698f8f563a42": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f5360ed0-ec57-4783-bce9-b7d4870adb59",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    }
+  }
+}
