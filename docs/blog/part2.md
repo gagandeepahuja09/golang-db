@@ -516,3 +516,6 @@ In upcoming parts, we will cover:
 * **Tombstones**: a way to represent deletes in an append-only world.
 * **Bloom filters**: a probabilistic data structure that lets us skip SSTable files that definitely don't contain a key, without reading anything from them.
 * **Tuning flush size and block size**: how large should the Memtable grow before flushing? How large should each data block be? These are not arbitrary choices and involve careful tradeoffs.
+
+todo in part 2:
+1. build memtable from wal explain in more detail
