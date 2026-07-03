@@ -30,6 +30,9 @@ func (txn *Transaction) tryAcquireWriteLock(key string) error {
 			// todo: can we have a wait feature where we wait for lock to be released instead of error?
 			return fmt.Errorf("cannot acquire write lock as write lock acquired by transaction '%d'", writerTxnId)
 		}
+		if writerTxnId == txn.id {
+			return nil
+		}
 
 		readerTxnIds := locksAcquired.readerTxnIds
 		if len(readerTxnIds) > 1 {
@@ -202,7 +205,7 @@ func (txn *Transaction) writeSingleWalEntryForCommit() {
 	txn.db.wal.WriteEntry(buf)
 }
 
-func (txn *Transaction) Commit() {
+func (txn *Transaction) Commit() error {
 	txn.writeSingleWalEntryForCommit()
 
 	// put in memtable done separately instead of db.Put as that would lead to separate writes in WAL
@@ -210,6 +213,14 @@ func (txn *Transaction) Commit() {
 		txn.db.memTable.Put(key, value)
 	}
 
+	if txn.db.memTable.ShouldFlush() {
+		if err := txn.db.createSsTableAndClearWalAndMemTable(); err != nil {
+			return err
+		}
+	}
+
 	txn.releaseAllLocks()
 	txn.cleanupBufferedWriteMap()
+
+	return nil
 }

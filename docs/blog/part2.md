@@ -500,6 +500,14 @@ func (st *SsTable) buildIndexFromFile(file *os.File) (int, []indexBlockEntry, er
 
 After these three steps, the database is ready to serve reads. This is also why the `Get()` function shown earlier can binary search the index block without any disk IO. The index was already loaded into memory at startup. The only disk read during a query is for the single data block that might contain the key.
 
+### Building Memtable from WAL on Restart
+
+There is one more piece to the startup puzzle. SSTables contain data that was flushed from previous memtables, but what about writes that arrived *after* the last flush? Those exist only in the WAL.
+
+On startup, the database replays the WAL to rebuild the current memtable. This is the `buildMemtableFromWal()` function in `db/db.go`. It reads every WAL entry from oldest to newest, parsing each command and inserting it into a fresh memtable. For duplicate keys, the newest value naturally overwrites the older one — exactly the behavior we need.
+
+After this replay, the memtable contains all writes since the last SSTable flush. Combined with the SSTable index blocks loaded in the previous step, the database has the complete picture: recent writes in the memtable, older writes in SSTables, and index blocks in memory for fast lookups.
+
 ## What's Next
 
 At this point, we have a working storage engine. WAL gives us durability. Memtable gives us fast in-memory writes with sorted ordering. SSTables give us efficient disk lookups using index blocks and binary search. And on startup, all the index blocks are pre-loaded so that reads only touch disk for the one data block that matters.
@@ -516,6 +524,3 @@ In upcoming parts, we will cover:
 * **Tombstones**: a way to represent deletes in an append-only world.
 * **Bloom filters**: a probabilistic data structure that lets us skip SSTable files that definitely don't contain a key, without reading anything from them.
 * **Tuning flush size and block size**: how large should the Memtable grow before flushing? How large should each data block be? These are not arbitrary choices and involve careful tradeoffs.
-
-todo in part 2:
-1. build memtable from wal explain in more detail
