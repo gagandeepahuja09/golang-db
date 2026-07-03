@@ -1,0 +1,39 @@
+docs/blog/part2.md
+  s_0867b29f711eb6::t_b7d7e9a8defeb6 503-510
+docs/open-source-contribution-notes.md
+  s_dc7ff924692908::t_e2469644d7febf 1-150
+docs/tidesdb-contribution-roadmap.md
+  s_bdbd28f31418b1::t_bc0d06e670b525 1-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "246eff9640fee3d49d77d27c22f5c74f1de556d6",
+  "prompts": {},
+  "sessions": {
+    "s_0867b29f711eb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a83a6b4a-2fdc-43c6-8c5a-9a018aec53b4",
+        "model": "unknown"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    },
+    "s_bdbd28f31418b1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ed8378b-89fd-44e1-a297-3b8e64d5938f",
+        "model": "unknown"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    },
+    "s_dc7ff924692908": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c2b1c0b5-a120-477a-9574-3d1b7cc5a0f6",
+        "model": "unknown"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    }
+  }
+}
