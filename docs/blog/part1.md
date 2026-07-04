@@ -12,15 +12,19 @@ This blog series serves two purposes:
 
 **What is not covered:** This series is for learning, not for writing a production database. Within the github repo, you will some TODOs, some missed edge cases, and some simplifications made to focus on the core ideas.
 
+## What this series covers?
+
+The series documents my learnings from building a relational database purely for learning purpose.
+
 ## Where to Start: Why a Key-Value Store?
 
-My initial instinct was to start with the query layer: SQL parsing, support operations like CREATE TABLE, and supporting multiple data types. I presented this plan to Claude and got some push back basis my plan and prompt that I should focus on the storage layer first.
+My initial instinct was to start with the query layer. This includes supporing SQL parsing, operations like CREATE TABLE, multiple data types and so on. I presented this plan to Claude and got some push back basis my plan and prompt that I should focus on the storage layer first.
 
 The key insight is that:
 
 > A key-value store can be extended to support everything a relational database needs.
 
-I had heard about this earlier before starting this project also but didn't really understand it.
+I had heard about this earlier before starting this project also but didn't really understand why and how is that possible.
 
 The reason for this is that every SQL operation can be mapped to a key-value operation. For example:
 - `CREATE TABLE payments (...)` can be mapped to storing the schema as a value under key `_schema:payments`. The value can be stored in a seralised manner and can be deserialised when we need to read it.
@@ -30,7 +34,7 @@ Even if the rationale doesn't make sense, don't worry. We will deep-dive again o
 
 ## Starting Simple: An In-Memory Key-Value Store
 
-Irrespective of databases, whatever problem we are solving, we start with the simplest thing that works.
+Whatever problem we are solving, we start with the simplest thing that works.
 
 > Correctness before performance. Performance before scale.
 
@@ -301,7 +305,7 @@ Now we can put it all together. When a user calls `PUT key value`:
 
 1. **Serialize the command** into bytes: `[length][payload][checksum]`
 2. **Append to WAL file** and `fsync`
-3. **Insert into memtable** (in-memory hashmap)
+3. **Insert into the in-memory hashmap**
 
 ```go
 func (db *DB) Put(key, value string) error {
@@ -311,12 +315,12 @@ func (db *DB) Put(key, value string) error {
         return err
     }
     // Step 3: Write to memory
-    db.memTable.Put(key, value)
+    db.data[key] = value
     return nil
 }
 ```
 
-The WAL write happens first (disk before memory). If it fails, we return an error — the user knows the write did not succeed. If the process crashes after the WAL write but before the memtable insert, the data is safe on disk and will be recovered on restart.
+The WAL write happens first (disk before memory). If it fails, we return an error — the user knows the write did not succeed. If the process crashes after the WAL write but before the in-memory map is updated, the data is safe on disk and will be recovered on restart.
 
 ## The Read Path
 
@@ -324,7 +328,7 @@ Reads are simple right now. We just look up the in-memory map:
 
 ```go
 func (db *DB) Get(key string) (string, error) {
-    value, ok := db.mp.Get(key)
+    value, ok := db.data[key]
     if !ok {
         return "", nil // key not found
     }
@@ -332,46 +336,46 @@ func (db *DB) Get(key string) (string, error) {
 }
 ```
 
-The WAL is **never read during normal operation**. It is purely a durability mechanism for writes. The memtable serves all reads.
+The WAL is **never read during normal operation**. It is purely a durability mechanism for writes. The in-memory map serves all reads.
 
 ## Application Init: Rebuilding State from WAL
 
 When the database process starts, the in-memory hashmap is empty. But the WAL on disk contains every write since the last checkpoint. We need to replay it:
 
 ```go
-func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
-    memTable := memtable.NewMemtable()
+func (db *DB) buildInMemoryMapFromWal() (map[string]string, error) {
+    data := map[string]string{}
     for {
         payload, err := db.wal.ReadEntry()
         if err == io.EOF {
-            return &memTable, nil // reached end of WAL
+            return data, nil // reached end of WAL
         }
         if err != nil {
             return nil, err // corruption or partial write
         }
         // parse and replay the PUT command
-        handlePutCmd(memTable, string(payload))
+        handlePutCmd(data, string(payload))
     }
 }
 ```
 
-This is the **only time the WAL is read**. The loop reads entries oldest to newest. For duplicate keys, the newest value naturally overwrites the older one in the memtable — exactly the behavior we want.
+This is the **only time the WAL is read**. The loop reads entries oldest to newest. For duplicate keys, the newest value naturally overwrites the older one in the hashmap — exactly the behavior we want.
 
-After replay, the memtable contains the same state as before the crash. The database is ready to serve reads.
+After replay, the in-memory map contains the same state as before the crash. The database is ready to serve reads.
 
 The full initialization sequence:
 1. Open WAL file
-2. Replay all WAL entries into a fresh memtable
+2. Replay all WAL entries into a fresh in-memory map
 3. Start accepting reads and writes
 
 ## What's Next
 
-WAL gives us durability. Writes are fast (append-only, sequential). Reads go through the in-memory memtable.
+WAL gives us durability. Writes are fast (append-only, sequential). Reads go through the in-memory hashmap.
 
-But there is a problem brewing. The WAL grows forever. Every update to the same key adds another entry. And the memtable — which is just a hashmap — gives us O(1) lookups but cannot scale beyond RAM.
+But there is a problem brewing. The WAL grows forever. Every update to the same key adds another entry leading to a lot of redundant data. And the in-memory hashmap gives us O(1) lookups but cannot scale beyond RAM.
 
 > What happens when the dataset exceeds memory? What happens when we need to read from disk efficiently?
 
 Right now, a "read from disk" means replaying the entire WAL — that is O(N) where N is every write ever made. As data grows, this becomes painfully slow.
 
-In Part 2, we will introduce **Memtables** (sorted in-memory structures) and **SSTables** (sorted disk files) — the core of an LSM tree. These let us flush memory to disk periodically and search disk files efficiently using binary search.
+In Part 2, we will evolve this hashmap into a sorted in-memory structure and introduce **SSTables** (sorted disk files) — the core of an LSM tree. These let us flush memory to disk periodically and search disk files efficiently using binary search.
