@@ -1,0 +1,19 @@
+docs/blog/part1.md
+  s_db6f27d5c5c062::t_11d59d71a0dcbb 308,318,323,331,339,346-347,351,357,362,364,368,373,375,381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c91d4a0f3336839fe16fdc9bab7f123595b3b4ef",
+  "prompts": {},
+  "sessions": {
+    "s_db6f27d5c5c062": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2cb4-2c44-7c22-8b14-20876c112083",
+        "model": "gpt-5.5"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    }
+  }
+}
