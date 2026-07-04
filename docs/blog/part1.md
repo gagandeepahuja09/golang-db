@@ -80,19 +80,20 @@ The answer is straightforward: write to disk. Memory is volatile. Disk is not. B
 
 ## Problem: Should We Write Disk-First or Memory-First?
 
-We need to write to both memory (for fast reads) and disk (for durability). What happens if one succeeds and the other one fails due to a process crash in between?
+For every `PUT`, we need two updates:
 
-> If we write in-memory first and then to disk, what happens if the process crashes between the two?
+1. Write to disk so the data survives a crash.
+2. Write to the in-memory map so reads are fast.
 
-The memory write succeeds. The disk write never happens. On restart, the data is lost. We told the user "write successful" but the data is gone.
+The order matters.
 
-Now consider the reverse: write to disk first and then in-memory.
+If we update memory first, there is a dangerous window where memory contains data that disk does not. If the process crashes in that window, the update disappears after restart.
 
-If the disk write succeeds but the process crashes before the memory write, the data is still on disk. On restart, we can easily recover it and no data is lost.
+Even without a crash, if the disk write fails after the memory update, we now have to undo the memory change. That makes the write path more complicated.
 
-There is a deeper reason too. Disk I/O has a much larger potential of failing compared to writing in-process memory. The common pattern in systems design is: **do the harder or riskier operation first.** If the disk write fails, we haven't touched memory yet — nothing to roll back. If memory allocation fails, well, the process is probably crashing anyway.
+If we write to disk first, the rule is simpler: only update memory after the durable write succeeds.
 
-So the rule is: **always write to disk first and then memory.**
+So the rule is: **write to disk first, then update memory.**
 
 ## Problem: How Should We Write to Disk?
 
@@ -161,7 +162,6 @@ The solution is a length prefix around the whole WAL payload:
 
 Here is a concrete byte-level example. Suppose the WAL payload is `"PUT a 1"` (7 bytes):
 
-
 ```text
 [00 00 00 07][50 55 54 20 61 20 31]
  └─ length ─┘└──── WAL payload ────┘
@@ -169,6 +169,8 @@ Here is a concrete byte-level example. Suppose the WAL payload is `"PUT a 1"` (7
 ```
 
 The WAL reader knows: read 4 bytes for the length (7), then read exactly 7 bytes for the payload. This removes ambiguity about where this WAL record ends.
+
+In plain English: the first 4 bytes say, "the next chunk is 7 bytes long."
 
 That solves record boundaries. But it does not yet solve how to parse the command inside the payload.
 
@@ -214,6 +216,8 @@ func serialisePutCommand(key, value string) []byte {
 }
 ```
 
+Think of `buf` as a growing array of bytes. For each field, we first append its 4-byte length, then append the actual bytes.
+
 And for reading one length-prefixed field:
 
 ```go
@@ -226,6 +230,8 @@ func readLengthPrefixedString(buf []byte, offset *int) (string, error) {
     return value, nil
 }
 ```
+
+Here, `offset` is just a cursor. It remembers where the next field starts inside the byte slice.
 
 The important idea is that we use length prefixes at two levels:
 
@@ -265,6 +271,8 @@ func (w *Wal) WriteEntry(payload []byte) error {
     return err
 }
 ```
+
+Here, `buf[0:4]` stores the length header. `buf[4:]` stores the payload right after it.
 
 The reader uses the length to read exactly the expected number of bytes:
 
@@ -351,6 +359,8 @@ func (w *Wal) WriteEntry(payload []byte) error {
     return err
 }
 ```
+
+`buf[4+len(payload):]` means "start writing after the 4-byte length header and the payload." That is where the checksum goes.
 
 With length prefixes and checksums together, the reader can handle these failure modes:
 - **Incomplete length** (less than 4 bytes written): `io.ReadFull` returns `io.ErrUnexpectedEOF`. We know this is a partial write.
