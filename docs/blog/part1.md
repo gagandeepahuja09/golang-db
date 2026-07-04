@@ -1,36 +1,28 @@
-# Part 1: WAL
+# Building SaarDB, Part 1: Write-Ahead Log (WAL)
 
-## Motivation and Learning Philosophy
+SaarDB is a learning project: build a relational database from first principles in Go, one layer at a time.
 
-As a software engineer, I have always been interested in going one level deeper in understanding systems and was most curious with deep-diving into database internals as a backend engineer. My preference was building hands-on rather than trying to read books to understand. 
+The goal is not to build a production database. The goal is to make database internals feel intuitive by building the core ideas directly and explaining the tradeoffs along the way.
 
-AI assisted learning helped fast track my learning process and keep me more engaged. I used Codex / Claude as a learning companion. I ask for hints, explanations and reviews, not for code. An internal `AGENTS.md` ensures it doesn't spoon-feed implementations.
+When we think of a relational database, it is tempting to start with SQL parsing, tables, data types, and query execution. But that starts with the interface before understanding the storage layer underneath it.
 
-This blog series serves two purposes:
-1. Be a guide for anyone building a database from scratch. Even a college undergraduate should be able to follow along and understand the core concepts.
-2. Be a revision tool for me. We learn best by first building and then explaining to others.
-
-**What is not covered:** This series is for learning, not for writing a production database. Within the GitHub repo, you will see some known gaps, missed edge cases, and simplifications made to focus on the core ideas.
-
-## What this series covers?
-
-The series documents my learnings from building a relational database purely for learning.
+So Part 1 starts smaller: a key-value store. From there, we will hit the first serious database problem: **how do we make writes survive a crash?**
 
 ## Where to Start: Why a Key-Value Store?
 
-My initial instinct was to start with the query layer. This includes supporting SQL parsing, operations like CREATE TABLE, multiple data types and so on. I presented this plan to Claude and got some push back based on my plan and prompt that I should focus on the storage layer first.
+The initial instinct may be to start with the query layer. This includes SQL parsing, operations like `CREATE TABLE`, multiple data types, and so on. But the storage layer is the foundation beneath all of that.
 
 The key insight is that:
 
 > A key-value store can be extended to support everything a relational database needs.
 
-I had heard about this earlier before starting this project also but didn't really understand why and how is that possible.
+This can feel surprising at first. How can a relational database, with tables and rows and SQL, start from something as small as key-value operations?
 
 The reason for this is that every SQL operation can be mapped to a key-value operation. For example:
 - `CREATE TABLE payments (...)` can be mapped to storing the schema as a value under key `_schema:payments`. The value can be stored in a serialized manner and can be deserialized when we need to read it.
 - `INSERT INTO payments VALUES (1, 500, 'pending')` can be mapped to a PUT operation: `PUT payments:1 <serialized_row>`. This design also ensures efficient lookup by primary key.
 
-Even if the rationale doesn't make sense, don't worry. We will deep-dive again on this from the 5th blog of the series. By that time, this will make much more sense.
+If this mapping still feels abstract, that is fine. Later posts will come back to this when we build more of the SQL layer on top of the storage engine.
 
 ## Starting Simple: An In-Memory Key-Value Store
 
@@ -68,7 +60,7 @@ func main() {
 
 This works. We can store and retrieve data. But there is an obvious problem.
 
-## Problem: The Process Crashes, Data Is Gone
+## The First Problem: Memory Is Volatile
 
 If we kill the process and restart it, everything is gone. The hashmap lived in memory and memory does not survive process restarts.
 
@@ -78,7 +70,7 @@ This is the problem of **durability**: guaranteeing that once a write succeeds, 
 
 The answer is straightforward: write to disk. Memory is volatile. Disk is not. But this raises a new question.
 
-## Problem: Should We Write Disk-First or Memory-First?
+## Choosing the Write Order
 
 For every `PUT`, we need two updates:
 
@@ -95,7 +87,7 @@ If we write to disk first, the rule is simpler: only update memory after the dur
 
 So the rule is: **write to disk first, then update memory.**
 
-## Problem: How Should We Write to Disk?
+## Why Append-Only Writes Help
 
 There is a golden rule for database performance:
 > Sequential writes are significantly faster than random writes.
@@ -134,7 +126,7 @@ Yes, we store the key twice. That is wasted space. But the write is fast, and we
 
 This append-only file is called a **Write-Ahead Log (WAL)**.
 
-## Problem: How Do We Encode Entries in the File?
+## Encoding WAL Entries
 
 We need to write a command like `PUT user_1 Alice` to the file. The naive approach is to use a separator like a space or newline:
 
@@ -218,7 +210,7 @@ func serialisePutCommand(key, value string) []byte {
 }
 ```
 
-Think of `buf` as a growing array of bytes. For each field, we first append its 4-byte length, then append the actual bytes.
+Think of `buf` as a growing byte slice: a resizable list of bytes. For each field, we first append its 4-byte length, then append the actual bytes.
 
 And for reading one length-prefixed field:
 
@@ -242,7 +234,7 @@ The important idea is that we use length prefixes at two levels:
 
 This pattern of `[length][data]` shows up everywhere in storage systems. We will use it again in future blogs.
 
-## Problem: What If the Process Crashes Mid-Write?
+## Handling Partial Writes
 
 Let's consider this scenario:
 
@@ -255,7 +247,7 @@ The file now contains:
 ...[valid entries]...[00 00 00 64][50 bytes of partial data]
 ```
 
-The fix is to write the payload length before the payload. That way, the reader knows exactly how many bytes to expect:
+This is where the length prefix helps. Because the payload length is written before the payload, the reader knows exactly how many bytes to expect:
 
 ```text
 [wal_payload_length][wal_payload]
@@ -309,7 +301,7 @@ func (w *Wal) ReadEntry() ([]byte, error) {
 
 If the length says 100 bytes but only 50 bytes exist, `io.ReadFull` returns `io.ErrUnexpectedEOF`. That tells us the last WAL record was only partially written.
 
-## Problem: What If the Bytes Are Written Incorrectly?
+## Detecting Corrupted Bytes
 
 A partial write is about missing bytes.
 
@@ -395,7 +387,7 @@ return payload, nil
 
 The intended recovery strategy is: if we detect a partial write at the **end** of the file, we can truncate it because it was the last write that did not complete. In the current implementation, we detect and return the error first; truncating the partial tail is a follow-up cleanup. On the other hand, if corruption is detected mid-file, that is a more serious problem (bit rot, hardware failure) that requires manual intervention.
 
-## Problem: The OS Lies About Writes
+## Making Writes Actually Reach Disk
 
 There is one more subtlety. Consider this code:
 
