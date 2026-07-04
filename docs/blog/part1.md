@@ -80,7 +80,7 @@ The answer is straightforward: write to disk. Memory is volatile. Disk is not. B
 
 ## Problem: Should We Write Disk-First or Memory-First? [todo]
 
-We need to write to both memory (for fast reads) and disk (for durability). What should the order be?
+We need to write to both memory (for fast reads) and disk (for durability). What happens if one suceeds and the other one fails due to a process crash in between?
 
 > If we write in-memory first and then to disk, what happens if the process crashes between the two?
 
@@ -214,11 +214,11 @@ This problem is commonly solved in distributed systems using CRC32, which is a f
 ```go
 // Writer
 func (w *Wal) WriteEntry(payload []byte) error {
-    buf := make([]byte, 4+len(payload)+4)
-    checksum := crc32.ChecksumIEEE(payload)
+    buf := make([]byte, 4+len(payload)+4) // append 4-byte additional checksum
+    checksum := crc32.ChecksumIEEE(payload) // checksum computed from payload
     binary.BigEndian.PutUint32(buf[0:4], uint32(len(payload)))
     copy(buf[4:4+len(payload)], payload)
-    binary.BigEndian.PutUint32(buf[4+len(payload):], checksum)
+    binary.BigEndian.PutUint32(buf[4+len(payload):], checksum) // checksum appended
     if _, err := w.file.Write(buf); err != nil {
         return err
     }
@@ -282,7 +282,7 @@ file.Write(buf)
 
 Did the data actually reach the disk? **No, not necessarily.**
 
-When you call `file.Write()`, the OS copies your data into a **page cache** (a buffer in RAM). The OS returns success immediately. It will eventually flush the page cache to the physical disk, but "eventually" might be seconds or minutes later. If power fails before that flush, the data is gone despite `Write()` returning success.
+When we call `file.Write()`, the OS copies the data into a **page cache** (a buffer in RAM). The OS returns success immediately. It will eventually flush the page cache to the physical disk, but "eventually" might be seconds or minutes later. If power fails before that flush, the data is gone despite `Write()` returning success.
 
 > `file.Write()` guarantees the data reached the OS. It does not guarantee the data reached the disk.
 
@@ -293,11 +293,11 @@ file.Write(buf)
 file.Sync() // forces OS to flush page cache to physical disk
 ```
 
-`file.Sync()` (which calls the `fsync` system call) blocks until the OS confirms the data is on the physical storage device. Only after `Sync()` returns can we be confident the data is durable.
+`file.Sync()` (which calls the `fsync` system call) blocks until the OS confirms the data is on the physical storage device. Only after `Sync()` returns, we can be confident that the data is durable.
 
 There is a tradeoff though. `fsync` is expensive. On an HDD, it can take 5-10ms. On an SSD, it is faster but still significant. Calling it after every single write gives maximum durability but reduces throughput. Production databases like PostgreSQL batch multiple writes before a single `fsync`, trading a small window of vulnerability for much higher throughput.
 
-For our database, we call `file.Sync()` after every WAL entry. Maximum safety, simpler reasoning but with performance tradeoff.
+For our database, we call `file.Sync()` after every WAL entry. This means maximum safety and simpler reasoning but with performance tradeoff.
 
 ## The Write Path
 
@@ -320,7 +320,8 @@ func (db *DB) Put(key, value string) error {
 }
 ```
 
-The WAL write happens first (disk before memory). If it fails, we return an error — the user knows the write did not succeed. If the process crashes after the WAL write but before the in-memory map is updated, the data is safe on disk and will be recovered on restart.
+The WAL write happens first (disk before memory). If it fails, we return an error so that the user knows the write did not succeed. 
+If the process crashes after the WAL write but before the in-memory map is updated, the data is safe on disk and will be recovered on restart.
 
 ## The Read Path
 
@@ -359,9 +360,10 @@ func (db *DB) buildInMemoryMapFromWal() (map[string]string, error) {
 }
 ```
 
-This is the **only time the WAL is read**. The loop reads entries oldest to newest. For duplicate keys, the newest value naturally overwrites the older one in the hashmap — exactly the behavior we want.
+This is the **only time the WAL is read**. The loop reads entries from oldest to newest. 
+For duplicate keys, the newest value naturally overwrites the older one in the hashmap which is exactly the behavior that we want.
 
-After replay, the in-memory map contains the same state as before the crash. The database is ready to serve reads.
+After replay, the in-memory map contains the same state as before the crash. After replay, the database is ready to serve reads.
 
 The full initialization sequence:
 1. Open WAL file
@@ -370,12 +372,11 @@ The full initialization sequence:
 
 ## What's Next
 
-WAL gives us durability. Writes are fast (append-only, sequential). Reads go through the in-memory hashmap.
+WAL gives us durability and fast writes (append-only, sequential). Reads go through the in-memory hashmap.
 
-But there is a problem brewing. The WAL grows forever. Every update to the same key adds another entry leading to a lot of redundant data. And the in-memory hashmap gives us O(1) lookups but cannot scale beyond RAM.
+But, we run into multiple issues at scale. 
+1) The WAL grows forever. Every update to the same key adds another entry leading to a lot of redundant data. 
+2) An in-memory hashmap gives us O(1) lookups but cannot scale beyond RAM.
+3) Replaying the entire WAL during application bootup becomes painfully slow.
 
-> What happens when the dataset exceeds memory? What happens when we need to read from disk efficiently?
-
-Right now, a "read from disk" means replaying the entire WAL — that is O(N) where N is every write ever made. As data grows, this becomes painfully slow.
-
-In Part 2, we will evolve this hashmap into a sorted in-memory structure and introduce **SSTables** (sorted disk files) — the core of an LSM tree. These let us flush memory to disk periodically and search disk files efficiently using binary search.
+In Part 2, we will introduce LSM trees which solves all of the above problems.
