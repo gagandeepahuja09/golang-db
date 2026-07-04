@@ -25,7 +25,7 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
-		args := strings.Split(line, " ")
+		args := strings.SplitN(line, " ", 3)
 		cmd := args[0]
 		breakLoop := false
 		switch cmd {
