@@ -1,0 +1,41 @@
+docs/blog/part1.md
+  s_db6f27d5c5c062::t_5e2ae820a26527 256
+  s_db6f27d5c5c062::t_760b9803a80c54 250
+  s_db6f27d5c5c062::t_cede962036a929 333,384
+  s_db6f27d5c5c062::t_b6e507aa068fef 488,490,501-504,506
+  s_db6f27d5c5c062::t_53b7eebddc991a 171,235
+  s_db6f27d5c5c062::t_5a398d5e22deb1 419-420,426-427,470-482
+  s_db6f27d5c5c062::t_862d64cf8574c8 361-362
+  s_db6f27d5c5c062::t_4f5cbeaae503d1 308-309,312-327,330-332,334,353,382
+  s_db6f27d5c5c062::t_2e1301ecd4891e 329
+  s_db6f27d5c5c062::t_50b44cf7b2519c 136,143-152,154,156,159,162,167,172-197,202-214,217,220-222,224-227,230-233
+  s_db6f27d5c5c062::t_de55c45301858a 13,17,21,30,53,81,83,108-110
+  s_db6f27d5c5c062::t_d657f42b6e40f0 239,253,260,262-265,275-277,281-283,292-293,328,336-352,364-381
+  s_db6f27d5c5c062::t_ff41e03311b273 269,300
+  s_db6f27d5c5c062::t_a1db66a9d56f92 302-305,307,310,355
+  s_db6f27d5c5c062::t_f2a8c23e441d0b 306
+  s_db6f27d5c5c062::t_9d7672cc7b1ac5 234
+  s_db6f27d5c5c062::t_afa5e15b0c6aaa 301
+  s_db6f27d5c5c062::t_50f2df24d67373 311
+  s_db6f27d5c5c062::t_63f645bd8d9293 335
+  s_db6f27d5c5c062::t_1c37b032137b07 354
+  s_db6f27d5c5c062::t_9b23c77978938e 356-360
+  s_db6f27d5c5c062::t_96c5288097fef7 363
+  s_db6f27d5c5c062::t_e9d863d8628927 383
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "91362d47bd1d8a099bcda459d6a40fe8f747e9ae",
+  "prompts": {},
+  "sessions": {
+    "s_db6f27d5c5c062": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2cb4-2c44-7c22-8b14-20876c112083",
+        "model": "gpt-5.5"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    }
+  }
+}
