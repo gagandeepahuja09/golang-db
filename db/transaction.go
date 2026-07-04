@@ -19,6 +19,11 @@ type Transaction struct {
 	lockAcquiredKeys []string
 }
 
+type walPutCommand struct {
+	key   string
+	value string
+}
+
 func (txn *Transaction) tryAcquireWriteLock(key string) error {
 	locksAcquired, ok := txn.db.transactionManager.keyVsLocksAcquiredMap[key]
 	readLockAlreadyAcquired := false
@@ -29,6 +34,9 @@ func (txn *Transaction) tryAcquireWriteLock(key string) error {
 		if writerTxnId != 0 && writerTxnId != txn.id {
 			// todo: can we have a wait feature where we wait for lock to be released instead of error?
 			return fmt.Errorf("cannot acquire write lock as write lock acquired by transaction '%d'", writerTxnId)
+		}
+		if writerTxnId == txn.id {
+			return nil
 		}
 
 		readerTxnIds := locksAcquired.readerTxnIds
@@ -152,64 +160,73 @@ func (txn *Transaction) Rollback() {
 	txn.cleanupBufferedWriteMap()
 }
 
-// structure: [length][payload][offset]
 // payload structure:
-// ----
-// [length_of_command][command][number_of_writes]
-// [payload_length_for_1st][payload_for_1st][payload_length_for_2nd][payload_for_2nd]...
-// till N = number_of_writes
-// ----
-// command is "TRANSACTION" in this case
-// todo: we need to change the structure of payload for PUT command also similar to this.
+// [length_of_command][command="TRANSACTION"][number_of_writes]
+// [key_length_for_1st][key_for_1st][value_length_for_1st][value_for_1st]...
 func serialiseTransactionCommitPayload(writeMap map[string]string) []byte {
-	payloads := []string{}
-	for key, value := range writeMap {
-		payload := fmt.Sprintf("PUT %s %s", key, value)
-		payloads = append(payloads, payload)
-	}
-
 	buf := []byte{}
-	transactionStr := "TRANSACTION"
-	buf = binary.BigEndian.AppendUint32(buf, uint32(len(transactionStr)))
-	buf = append(buf, []byte(transactionStr)...)
-	buf = binary.BigEndian.AppendUint32(buf, uint32(len(payloads)))
+	buf = appendLengthPrefixedString(buf, CmdTransaction)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(writeMap)))
 
-	for _, payload := range payloads {
-		buf = binary.BigEndian.AppendUint32(buf, uint32(len(payload)))
-		buf = append(buf, []byte(payload)...)
+	for key, value := range writeMap {
+		buf = appendLengthPrefixedString(buf, key)
+		buf = appendLengthPrefixedString(buf, value)
 	}
 	return buf
 }
 
-// [number_of_writes][payload_length_for_1st][payload_for_1st][payload_length_for_2nd][payload_for_2nd]...
-func deserialiseTransactionCommand(buf []byte) (payloads []string) {
-	i := 0
-	numWrites := binary.BigEndian.Uint32(buf[i : i+4])
-	i += 4
-	for j := 0; j < int(numWrites); j++ {
-		payloadLength := binary.BigEndian.Uint32(buf[i : i+4])
-		i += 4
-		payload := string(buf[i : i+int(payloadLength)])
-		i += int(payloadLength)
-		payloads = append(payloads, payload)
+// [number_of_writes][key_length_for_1st][key_for_1st][value_length_for_1st][value_for_1st]...
+func deserialiseTransactionCommand(buf []byte) ([]walPutCommand, error) {
+	offset := 0
+	numWrites, err := readUint32(buf, &offset)
+	if err != nil {
+		return nil, err
 	}
-	return payloads
+	putCmds := []walPutCommand{}
+	for j := 0; j < int(numWrites); j++ {
+		key, err := readLengthPrefixedString(buf, &offset)
+		if err != nil {
+			return nil, err
+		}
+		value, err := readLengthPrefixedString(buf, &offset)
+		if err != nil {
+			return nil, err
+		}
+		putCmds = append(putCmds, walPutCommand{
+			key:   key,
+			value: value,
+		})
+	}
+	if offset != len(buf) {
+		return nil, errors.New("malformed WAL command: unexpected trailing bytes")
+	}
+	return putCmds, nil
 }
 
 // necessary to do in a single WAL write for atomicity
-func (txn *Transaction) writeSingleWalEntryForCommit() {
+func (txn *Transaction) writeSingleWalEntryForCommit() error {
 	buf := serialiseTransactionCommitPayload(txn.bufferedWriteMap)
-	txn.db.wal.WriteEntry(buf)
+	return txn.db.wal.WriteEntry(buf)
 }
 
-func (txn *Transaction) Commit() {
-	txn.writeSingleWalEntryForCommit()
+func (txn *Transaction) Commit() error {
+	if err := txn.writeSingleWalEntryForCommit(); err != nil {
+		return err
+	}
 
 	// put in memtable done separately instead of db.Put as that would lead to separate writes in WAL
 	for key, value := range txn.bufferedWriteMap {
 		txn.db.memTable.Put(key, value)
 	}
 
+	if txn.db.memTable.ShouldFlush() {
+		if err := txn.db.createSsTableAndClearWalAndMemTable(); err != nil {
+			return err
+		}
+	}
+
 	txn.releaseAllLocks()
 	txn.cleanupBufferedWriteMap()
+
+	return nil
 }

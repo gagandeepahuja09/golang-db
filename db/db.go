@@ -20,6 +20,7 @@ const (
 	SecondaryIndexesCatalogKeyTemplate       = "_secondary_indexes:%s"
 	SchemaTemplate                           = "_schema:%s"
 	IndexKeyTemplateTableNameIndexNamePrefix = "index:%s:%s"
+	CmdPut                                   = "PUT"
 )
 
 type LocksAcquired struct {
@@ -169,28 +170,59 @@ func (db *DB) flushMemtableToSsTable() error {
 }
 
 func (db *DB) writeToWal(key, value string) error {
-	buf := serialiseCommand("PUT", fmt.Sprintf("PUT %s %s", key, value))
+	buf := serialisePutCommand(key, value)
 	return db.wal.WriteEntry(buf)
 }
 
-func serialiseCommand(command, payload string) []byte {
-	buf := []byte{}
-	buf = binary.BigEndian.AppendUint32(buf, uint32(len(command)))
-	buf = append(buf, []byte(command)...)
-	buf = binary.BigEndian.AppendUint32(buf, uint32(len(payload)))
-	buf = append(buf, []byte(payload)...)
+func appendLengthPrefixedString(buf []byte, value string) []byte {
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(value)))
+	buf = append(buf, []byte(value)...)
 	return buf
 }
 
-func handlePutCmd(memTable memtable.Memtable, line string) error {
-	args := strings.Split(line, " ")
-	if len(args) != 3 {
-		return errors.New("Expected exactly 2 arguments for PUT command")
+func readUint32(buf []byte, offset *int) (uint32, error) {
+	if len(buf)-*offset < 4 {
+		return 0, errors.New("malformed WAL command: missing uint32")
 	}
-	key := args[1]
-	value := args[2]
-	memTable.Put(key, value)
-	return nil
+	value := binary.BigEndian.Uint32(buf[*offset : *offset+4])
+	*offset += 4
+	return value, nil
+}
+
+func readLengthPrefixedString(buf []byte, offset *int) (string, error) {
+	valueLen, err := readUint32(buf, offset)
+	if err != nil {
+		return "", err
+	}
+	if valueLen > uint32(len(buf)-*offset) {
+		return "", errors.New("malformed WAL command: string length exceeds payload")
+	}
+	value := string(buf[*offset : *offset+int(valueLen)])
+	*offset += int(valueLen)
+	return value, nil
+}
+
+func serialisePutCommand(key, value string) []byte {
+	buf := []byte{}
+	buf = appendLengthPrefixedString(buf, CmdPut)
+	buf = appendLengthPrefixedString(buf, key)
+	buf = appendLengthPrefixedString(buf, value)
+	return buf
+}
+
+func deserialisePutCommand(buf []byte, offset *int) (key, value string, err error) {
+	key, err = readLengthPrefixedString(buf, offset)
+	if err != nil {
+		return "", "", err
+	}
+	value, err = readLengthPrefixedString(buf, offset)
+	if err != nil {
+		return "", "", err
+	}
+	if *offset != len(buf) {
+		return "", "", errors.New("malformed WAL command: unexpected trailing bytes")
+	}
+	return key, value, nil
 }
 
 func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
@@ -207,24 +239,28 @@ func (db *DB) buildMemtableFromWal() (*memtable.Memtable, error) {
 			return nil, err
 		}
 
-		// read [command_length(4_bytes)][command_string] to figure out the command type
-		// and accordingly deserialise.
-		i := 0
-		len := binary.BigEndian.Uint32(payload[i : i+4])
-		i += 4
-		cmd := string(payload[i : i+int(len)])
-		i += int(len)
-		if cmd == CmdTransaction {
-			putCmds := deserialiseTransactionCommand(payload[i:])
-			for _, cmd := range putCmds {
-				if err := handlePutCmd(memTable, cmd); err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			if err := handlePutCmd(memTable, string(payload)); err != nil {
+		offset := 0
+		cmd, err := readLengthPrefixedString(payload, &offset)
+		if err != nil {
+			return nil, err
+		}
+		switch cmd {
+		case CmdPut:
+			key, value, err := deserialisePutCommand(payload, &offset)
+			if err != nil {
 				return nil, err
 			}
+			memTable.Put(key, value)
+		case CmdTransaction:
+			putCmds, err := deserialiseTransactionCommand(payload[offset:])
+			if err != nil {
+				return nil, err
+			}
+			for _, cmd := range putCmds {
+				memTable.Put(cmd.key, cmd.value)
+			}
+		default:
+			return nil, fmt.Errorf("unknown WAL command: %s", cmd)
 		}
 	}
 }
