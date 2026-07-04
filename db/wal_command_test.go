@@ -25,6 +25,17 @@ func newDBForWalCommandTest(t *testing.T) (*DB, Config) {
 	return dbInstance, config
 }
 
+func closeDBOnce(dbInstance *DB) func() {
+	closed := false
+	return func() {
+		if closed {
+			return
+		}
+		dbInstance.Close()
+		closed = true
+	}
+}
+
 func TestSerialisePutCommandRoundTrip(t *testing.T) {
 	payload := serialisePutCommand("key with spaces", "value with spaces\nand newline")
 
@@ -41,16 +52,19 @@ func TestSerialisePutCommandRoundTrip(t *testing.T) {
 
 func TestReadLengthPrefixedStringMalformedPayload(t *testing.T) {
 	testCases := []struct {
-		name string
-		buf  []byte
+		name        string
+		buf         []byte
+		expectedErr string
 	}{
 		{
-			name: "missing length",
-			buf:  []byte{0, 0, 0},
+			name:        "missing length",
+			buf:         []byte{0, 0, 0},
+			expectedErr: "malformed WAL command: missing uint32",
 		},
 		{
-			name: "string length exceeds payload",
-			buf:  []byte{0, 0, 0, 5, 'a'},
+			name:        "string length exceeds payload",
+			buf:         []byte{0, 0, 0, 5, 'a'},
+			expectedErr: "malformed WAL command: string length exceeds payload",
 		},
 	}
 
@@ -58,12 +72,14 @@ func TestReadLengthPrefixedStringMalformedPayload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			offset := 0
 			_, err := readLengthPrefixedString(tt.buf, &offset)
-			assert.Error(t, err)
+			assert.EqualError(t, err, tt.expectedErr)
 		})
 	}
 }
 
 func TestDeserialisePutCommandRejectsTrailingBytes(t *testing.T) {
+	// A valid PUT command should consume the full WAL payload. The extra byte
+	// simulates malformed data that the parser must not silently ignore.
 	payload := append(serialisePutCommand("key", "value"), 'x')
 
 	offset := 0
@@ -72,7 +88,7 @@ func TestDeserialisePutCommandRejectsTrailingBytes(t *testing.T) {
 	require.Equal(t, CmdPut, cmd)
 
 	_, _, err = deserialisePutCommand(payload, &offset)
-	assert.Error(t, err)
+	assert.EqualError(t, err, "malformed WAL command: unexpected trailing bytes")
 }
 
 func TestSerialiseTransactionCommitPayloadRoundTrip(t *testing.T) {
@@ -102,11 +118,13 @@ func TestSerialiseTransactionCommitPayloadRoundTrip(t *testing.T) {
 
 func TestDeserialiseTransactionCommandRejectsMalformedPayload(t *testing.T) {
 	_, err := deserialiseTransactionCommand([]byte{0, 0, 0})
-	assert.Error(t, err)
+	assert.EqualError(t, err, "malformed WAL command: missing uint32")
 }
 
 func TestDBRecoversPutValuesWithSpacesAndNewlines(t *testing.T) {
 	dbInstance, config := newDBForWalCommandTest(t)
+	closeDB := closeDBOnce(dbInstance)
+	defer closeDB()
 
 	expected := map[string]string{
 		"simple":          "value with spaces",
@@ -115,7 +133,7 @@ func TestDBRecoversPutValuesWithSpacesAndNewlines(t *testing.T) {
 	for key, value := range expected {
 		require.NoError(t, dbInstance.Put(key, value))
 	}
-	dbInstance.Close()
+	closeDB()
 
 	dbAfterRestart, err := NewDB(config)
 	require.NoError(t, err)
@@ -130,10 +148,12 @@ func TestDBRecoversPutValuesWithSpacesAndNewlines(t *testing.T) {
 
 func TestDBRecoversLatestValueAfterOverwrite(t *testing.T) {
 	dbInstance, config := newDBForWalCommandTest(t)
+	closeDB := closeDBOnce(dbInstance)
+	defer closeDB()
 
 	require.NoError(t, dbInstance.Put("same key", "old value"))
 	require.NoError(t, dbInstance.Put("same key", "new value\nwith newline"))
-	dbInstance.Close()
+	closeDB()
 
 	dbAfterRestart, err := NewDB(config)
 	require.NoError(t, err)
@@ -146,13 +166,15 @@ func TestDBRecoversLatestValueAfterOverwrite(t *testing.T) {
 
 func TestDBRecoversTransactionValuesWithSpacesAndNewlines(t *testing.T) {
 	dbInstance, config := newDBForWalCommandTest(t)
+	closeDB := closeDBOnce(dbInstance)
+	defer closeDB()
 
 	txn, err := dbInstance.Begin()
 	require.NoError(t, err)
 	require.NoError(t, txn.Put("txn key with spaces", "txn value with spaces"))
 	require.NoError(t, txn.Put("txn key newline", "txn value\nwith newline"))
 	require.NoError(t, txn.Commit())
-	dbInstance.Close()
+	closeDB()
 
 	dbAfterRestart, err := NewDB(config)
 	require.NoError(t, err)
