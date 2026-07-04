@@ -10,15 +10,15 @@ This blog series serves two purposes:
 1. Be a guide for anyone building a database from scratch. Even a college undergraduate should be able to follow along and understand the core concepts.
 2. Be a revision tool for me. We learn best by first building and then explaining to others.
 
-**What is not covered:** This series is for learning, not for writing a production database. Within the github repo, you will some TODOs, some missed edge cases, and some simplifications made to focus on the core ideas.
+**What is not covered:** This series is for learning, not for writing a production database. Within the GitHub repo, you will see some known gaps, missed edge cases, and simplifications made to focus on the core ideas.
 
 ## What this series covers?
 
-The series documents my learnings from building a relational database purely for learning purpose.
+The series documents my learnings from building a relational database purely for learning.
 
 ## Where to Start: Why a Key-Value Store?
 
-My initial instinct was to start with the query layer. This includes supporing SQL parsing, operations like CREATE TABLE, multiple data types and so on. I presented this plan to Claude and got some push back basis my plan and prompt that I should focus on the storage layer first.
+My initial instinct was to start with the query layer. This includes supporting SQL parsing, operations like CREATE TABLE, multiple data types and so on. I presented this plan to Claude and got some push back based on my plan and prompt that I should focus on the storage layer first.
 
 The key insight is that:
 
@@ -27,7 +27,7 @@ The key insight is that:
 I had heard about this earlier before starting this project also but didn't really understand why and how is that possible.
 
 The reason for this is that every SQL operation can be mapped to a key-value operation. For example:
-- `CREATE TABLE payments (...)` can be mapped to storing the schema as a value under key `_schema:payments`. The value can be stored in a seralised manner and can be deserialised when we need to read it.
+- `CREATE TABLE payments (...)` can be mapped to storing the schema as a value under key `_schema:payments`. The value can be stored in a serialized manner and can be deserialized when we need to read it.
 - `INSERT INTO payments VALUES (1, 500, 'pending')` can be mapped to a PUT operation: `PUT payments:1 <serialized_row>`. This design also ensures efficient lookup by primary key.
 
 Even if the rationale doesn't make sense, don't worry. We will deep-dive again on this from the 5th blog of the series. By that time, this will make much more sense.
@@ -50,7 +50,7 @@ func main() {
     scanner := bufio.NewScanner(os.Stdin)
     for scanner.Scan() {
         line := scanner.Text()
-        args := strings.Split(line, " ")
+        args := strings.SplitN(line, " ", 3)
         cmd := args[0]
         switch cmd {
         case "GET":
@@ -78,9 +78,9 @@ This is the problem of **durability**: guaranteeing that once a write succeeds, 
 
 The answer is straightforward: write to disk. Memory is volatile. Disk is not. But this raises a new question.
 
-## Problem: Should We Write Disk-First or Memory-First? [todo]
+## Problem: Should We Write Disk-First or Memory-First?
 
-We need to write to both memory (for fast reads) and disk (for durability). What happens if one suceeds and the other one fails due to a process crash in between?
+We need to write to both memory (for fast reads) and disk (for durability). What happens if one succeeds and the other one fails due to a process crash in between?
 
 > If we write in-memory first and then to disk, what happens if the process crashes between the two?
 
@@ -105,7 +105,9 @@ Let's go over what sequential and random writes actually are and why that is the
 
 On the other hand, **random write** means that the data is written in a scattered way across non-contiguous locations. 
 
-In case of random writes, the disk head has to jump around which makes it much slower than sequential writes where the disk head doesn't have to jump around and progessively moves through contiguous locations.
+In case of random writes, the disk head has to jump around which makes it much slower than sequential writes where the disk head doesn't have to jump around and progressively moves through contiguous locations.
+
+That disk-head explanation is easiest to visualize for HDDs. SSDs do not have moving heads, but sequential writes are still useful because they are friendlier to batching, filesystems, and storage-device internals.
 
 Let's take an example to understand this in greater detail.
 
@@ -131,60 +133,110 @@ This append-only file is called a **Write-Ahead Log (WAL)**.
 
 ## Problem: How Do We Encode Entries in the File?
 
-We need to write `PUT key value` to the file. The naive approach is to use a separator like a space or newline:
+We need to write a command like `PUT user_1 Alice` to the file. The naive approach is to use a separator like a space or newline:
 
 ```text
 PUT user_1 Alice\n
 PUT user_2 Bob\n
 ```
 
-But what if a key or value contains a space or a newline? The reader would then split in the wrong place and corrupt all subsequent reads.
+This looks readable, but it hides two different problems.
 
-> We need an encoding that works regardless of what characters the key or value contains.
+### Problem 1: Where Does One WAL Record End?
 
-The solution is **binary serialization with length prefixes**. Instead of separating fields with special characters, we prefix each field with its length in bytes:
+Suppose the value contains a newline:
 
 ```text
-[length_of_payload][payload]
+PUT user_1 Alice
+Bob
 ```
 
-Where payload is the string `"PUT user_1 Alice"`.
+If our WAL reader treats newline as the end of an entry, it will think `Bob` is a separate command. So the first thing we need is a way to say: **this WAL record is exactly N bytes long.**
 
-Here is a concrete byte-level example. Suppose the payload is `"PUT a 1"` (7 bytes):
+The solution is a length prefix around the whole WAL payload:
+
+```text
+[wal_payload_length][wal_payload]
+```
+
+Here is a concrete byte-level example. Suppose the WAL payload is `"PUT a 1"` (7 bytes):
+
 
 ```text
 [00 00 00 07][50 55 54 20 61 20 31]
- └─ length ─┘└────── payload ──────┘
+ └─ length ─┘└──── WAL payload ────┘
      = 7        P  U  T     a     1
 ```
 
-The reader knows: read 4 bytes for the length (7), then read exactly 7 bytes for the payload. No ambiguity, no matter what the payload contains.
+The WAL reader knows: read 4 bytes for the length (7), then read exactly 7 bytes for the payload. This removes ambiguity about where this WAL record ends.
+
+That solves record boundaries. But it does not yet solve how to parse the command inside the payload.
+
+### Problem 2: How Do We Parse the Command Inside the Payload?
+
+If the payload itself is still a string like this:
+
+```text
+PUT user_1 Alice Bob
+```
+
+we are back to the same problem. Is the value `Alice`? Or is the value `Alice Bob`?
+
+So the payload also needs length prefixes for its internal fields:
+
+```text
+[cmd_len][cmd][key_len][key][value_len][value]
+```
+
+For example, `PUT user_1 "Alice Bob"` becomes:
+
+```text
+[3][PUT][6][user_1][9][Alice Bob]
+```
+
+The exact bytes use 4-byte integers for the lengths, but conceptually this is the format. First we read the command, then the key, then the value. Spaces and newlines inside the value are just bytes; they do not confuse the parser.
 
 In Go, the write flow looks like:
 
 ```go
-buf := make([]byte, 4+len(payload)) // add short and easy to understand comments for each line
-binary.BigEndian.PutUint32(buf[0:4], uint32(len(payload)))
-copy(buf[4:], payload)
-file.Write(buf)
+func appendLengthPrefixedString(buf []byte, value string) []byte {
+    buf = binary.BigEndian.AppendUint32(buf, uint32(len(value)))
+    buf = append(buf, []byte(value)...)
+    return buf
+}
+
+func serialisePutCommand(key, value string) []byte {
+    buf := []byte{}
+    buf = appendLengthPrefixedString(buf, "PUT")
+    buf = appendLengthPrefixedString(buf, key)
+    buf = appendLengthPrefixedString(buf, value)
+    return buf
+}
 ```
 
-And for reading, we use `io.ReadFull` to read exactly N bytes:
+And for reading one length-prefixed field:
 
 ```go
-lengthBuf := make([]byte, 4)
-io.ReadFull(file, lengthBuf)
-payloadLength := binary.BigEndian.Uint32(lengthBuf)
+func readLengthPrefixedString(buf []byte, offset *int) (string, error) {
+    valueLen := binary.BigEndian.Uint32(buf[*offset : *offset+4])
+    *offset += 4
 
-payload := make([]byte, payloadLength)
-io.ReadFull(file, payload)
+    value := string(buf[*offset : *offset+int(valueLen)])
+    *offset += int(valueLen)
+    return value, nil
+}
 ```
 
-This pattern of `[length][data]` shows up everywhere in storage systems. We will use it again in future blogs for SSTable data blocks, index blocks, and transaction payloads.
+The important idea is that we use length prefixes at two levels:
+
+1. The WAL layer frames the whole record.
+2. The database command layer frames the fields inside that record.
+
+This pattern of `[length][data]` shows up everywhere in storage systems. We will use it again in future blogs.
 
 ## Problem: What If the Process Crashes Mid-Write?
 
-Our WAL writes `[length][payload]` for each entry. Now consider this scenario:
+Let's consider this scenario:
 
 1. We start writing a 100-byte payload
 2. The OS writes the 4-byte length header: `[00 00 00 64]`
@@ -195,80 +247,141 @@ The file now contains:
 ...[valid entries]...[00 00 00 64][50 bytes of partial data]
 ```
 
-On restart, the reader reads the length (100), tries to read 100 bytes, but only 50 exist, hence it reads 50 additional bytes which is garbage and corrupts any further data.
-
-Above scenario is considered a partial write. But apart from partial writes, corrupted writes are also possible. Corrupted write is the case when some of the bytes are wrongly written.
-
-todo: Add a short 1 or 2 liner telling that why and how these kind of things are possible in a hardware.
-
-> How does the reader distinguish a valid entry from a corrupt or partial one?
-
-The solution: add a **checksum** after the payload.
+The fix is to write the payload length before the payload. That way, the reader knows exactly how many bytes to expect:
 
 ```text
-[length][payload][checksum]
+[wal_payload_length][wal_payload]
 ```
 
-This problem is commonly solved in distributed systems using CRC32, which is a fast hash that produces a 4-byte fingerprint of the payload. The writer computes the checksum over the payload bytes and appends it. The reader reads the payload, independently computes the checksum, and compares (todo: add some intuition sort of thing about this CRC32):
+The writer side looks like this:
 
 ```go
-// Writer
 func (w *Wal) WriteEntry(payload []byte) error {
-    buf := make([]byte, 4+len(payload)+4) // append 4-byte additional checksum
-    checksum := crc32.ChecksumIEEE(payload) // checksum computed from payload
+    buf := make([]byte, 4+len(payload))
     binary.BigEndian.PutUint32(buf[0:4], uint32(len(payload)))
-    copy(buf[4:4+len(payload)], payload)
-    binary.BigEndian.PutUint32(buf[4+len(payload):], checksum) // checksum appended
-    if _, err := w.file.Write(buf); err != nil {
-        return err
-    }
-    return w.file.Sync()
+    copy(buf[4:], payload)
+
+    _, err := w.file.Write(buf)
+    return err
 }
 ```
 
-Now the reader can handle every failure mode:
-- **Incomplete length** (less than 4 bytes written): `io.ReadFull` returns `io.ErrUnexpectedEOF`. We know this is a partial write.
-- **Incomplete payload**: Length says 100 bytes but only 50 exist. Same error.
-- **Incomplete checksum**: Payload looks complete but checksum is truncated.
-- **Corrupted data**: All bytes present but checksum does not match. Data is bad.
+The reader uses the length to read exactly the expected number of bytes:
 
 ```go
 func (w *Wal) ReadEntry() ([]byte, error) {
-    // 1. Read length
     lengthBuf := make([]byte, 4)
     _, err := io.ReadFull(w.file, lengthBuf)
-    if err == io.EOF { return nil, io.EOF }
+    if err == io.EOF {
+        return nil, io.EOF
+    }
     if err == io.ErrUnexpectedEOF {
         return nil, errors.New("partial write: incomplete length")
+    }
+    if err != nil {
+        return nil, err
     }
 
     payloadLength := binary.BigEndian.Uint32(lengthBuf)
 
-    // 2. Read payload
     payload := make([]byte, payloadLength)
     _, err = io.ReadFull(w.file, payload)
     if err == io.ErrUnexpectedEOF {
         return nil, errors.New("partial write: incomplete payload")
     }
-
-    // 3. Read and verify checksum
-    checksumBuf := make([]byte, 4)
-    _, err = io.ReadFull(w.file, checksumBuf)
-    if err == io.ErrUnexpectedEOF {
-        return nil, errors.New("partial write: incomplete checksum")
-    }
-
-    storedChecksum := binary.BigEndian.Uint32(checksumBuf)
-    computedChecksum := crc32.ChecksumIEEE(payload)
-    if storedChecksum != computedChecksum {
-        return nil, errors.New("corrupt: checksum mismatch")
+    if err != nil {
+        return nil, err
     }
 
     return payload, nil
 }
 ```
 
-The recovery strategy: if we detect a partial write at the **end** of the file, we truncate it as it was the last write that did not complete. On the other hand, if corruption is detected mid-file, that is a more serious problem (bit rot, hardware failure) that requires manual intervention.
+If the length says 100 bytes but only 50 bytes exist, `io.ReadFull` returns `io.ErrUnexpectedEOF`. That tells us the last WAL record was only partially written.
+
+## Problem: What If the Bytes Are Written Incorrectly?
+
+A partial write is about missing bytes.
+
+A corrupted write is different: all bytes may be present, but some bytes are wrong. This is not just a theory. Disks, SSDs, filesystems, OS crashes, power loss, and storage controllers can all fail in ways that leave bad bytes behind.
+
+Most writes work fine. But databases are built for the cases where bytes are missing or wrong. The length prefix catches missing bytes. It does not prove that the bytes we read are the correct bytes.
+
+> How does the reader know the bytes are correct?
+
+A checksum solves this. A checksum is a small fingerprint computed from data. If the payload bytes are the same, the checksum will be the same. If even one byte changes accidentally, the checksum will most likely change.
+
+For example, suppose the writer stores this payload:
+
+```text
+PUT user_1 Alice
+```
+
+The writer computes a checksum from these bytes and stores it next to the payload. Later, if the payload somehow becomes:
+
+```text
+PUT user_1 Aljce
+```
+
+the length may still be valid, but the checksum will likely be different. That tells us the payload bytes are not trustworthy.
+
+Now we extend the same WAL record by adding a 4-byte checksum at the end:
+
+```text
+[wal_payload_length][wal_payload][checksum]
+```
+
+This problem is commonly solved in storage systems using CRC32, which is a fast checksum algorithm. The writer computes the CRC32 checksum over the payload bytes and appends it. The reader reads the payload, independently computes the checksum, and compares it with the stored checksum.
+
+On the writer side, the length and payload logic stays the same. We only add space for the checksum, compute it from the payload, and append it:
+
+```go
+func (w *Wal) WriteEntry(payload []byte) error {
+    buf := make([]byte, 4+len(payload)+4)
+
+    // ...same length and payload writes as before...
+    binary.BigEndian.PutUint32(buf[0:4], uint32(len(payload)))
+    copy(buf[4:4+len(payload)], payload)
+
+    // New part: append checksum after the payload.
+    checksum := crc32.ChecksumIEEE(payload)
+    binary.BigEndian.PutUint32(buf[4+len(payload):], checksum)
+
+    _, err := w.file.Write(buf)
+    return err
+}
+```
+
+With length prefixes and checksums together, the reader can handle these failure modes:
+- **Incomplete length** (less than 4 bytes written): `io.ReadFull` returns `io.ErrUnexpectedEOF`. We know this is a partial write.
+- **Incomplete payload**: Length says 100 bytes but only 50 exist. Same error.
+- **Incomplete checksum**: Payload looks complete but checksum is truncated.
+- **Corrupted data**: All bytes present but checksum does not match. Data is bad.
+
+After the reader has already read the length and payload, the checksum check is the extra part:
+
+```go
+// ...same length and payload reads as before...
+
+checksumBuf := make([]byte, 4)
+_, err = io.ReadFull(w.file, checksumBuf)
+if err == io.ErrUnexpectedEOF {
+    return nil, errors.New("partial write: incomplete checksum")
+}
+if err != nil {
+    return nil, err
+}
+
+storedChecksum := binary.BigEndian.Uint32(checksumBuf)
+computedChecksum := crc32.ChecksumIEEE(payload)
+if storedChecksum != computedChecksum {
+    return nil, errors.New("corrupt: checksum mismatch")
+}
+
+return payload, nil
+```
+
+The intended recovery strategy is: if we detect a partial write at the **end** of the file, we can truncate it because it was the last write that did not complete. In the current implementation, we detect and return the error first; truncating the partial tail is a follow-up cleanup. On the other hand, if corruption is detected mid-file, that is a more serious problem (bit rot, hardware failure) that requires manual intervention.
 
 ## Problem: The OS Lies About Writes
 
@@ -303,15 +416,15 @@ For our database, we call `file.Sync()` after every WAL entry. This means maximu
 
 Now we can put it all together. When a user calls `PUT key value`:
 
-1. **Serialize the command** into bytes: `[length][payload][checksum]`
-2. **Append to WAL file** and `fsync`
+1. **Serialize the command payload** into bytes: `[cmd_len][cmd][key_len][key][value_len][value]`
+2. **Append it as a WAL record**: `[wal_payload_length][wal_payload][checksum]` and `fsync`
 3. **Insert into the in-memory hashmap**
 
 ```go
 func (db *DB) Put(key, value string) error {
     // Step 1-2: Write to WAL (disk first)
-    buf := serialiseCommand("PUT", fmt.Sprintf("PUT %s %s", key, value))
-    if err := db.wal.WriteEntry(buf); err != nil {
+    walPayload := serialisePutCommand(key, value)
+    if err := db.wal.WriteEntry(walPayload); err != nil {
         return err
     }
     // Step 3: Write to memory
@@ -354,16 +467,27 @@ func (db *DB) buildInMemoryMapFromWal() (map[string]string, error) {
         if err != nil {
             return nil, err // corruption or partial write
         }
-        // parse and replay the PUT command
-        handlePutCmd(data, string(payload))
+
+        offset := 0
+        cmd, err := readLengthPrefixedString(payload, &offset)
+        if err != nil {
+            return nil, err
+        }
+        if cmd == "PUT" {
+            key, value, err := deserialisePutCommand(payload, &offset)
+            if err != nil {
+                return nil, err
+            }
+            data[key] = value
+        }
     }
 }
 ```
 
 This is the **only time the WAL is read**. The loop reads entries from oldest to newest. 
-For duplicate keys, the newest value naturally overwrites the older one in the hashmap which is exactly the behavior that we want.
+For duplicate keys, the newest value naturally overwrites the older one in the hashmap, which is exactly the behavior we want.
 
-After replay, the in-memory map contains the same state as before the crash. After replay, the database is ready to serve reads.
+After replay, the in-memory map contains the same state as before the crash. The database is ready to serve reads.
 
 The full initialization sequence:
 1. Open WAL file
@@ -374,9 +498,9 @@ The full initialization sequence:
 
 WAL gives us durability and fast writes (append-only, sequential). Reads go through the in-memory hashmap.
 
-But, we run into multiple issues at scale. 
-1) The WAL grows forever. Every update to the same key adds another entry leading to a lot of redundant data. 
-2) An in-memory hashmap gives us O(1) lookups but cannot scale beyond RAM.
-3) Replaying the entire WAL during application bootup becomes painfully slow.
+But we run into multiple issues at scale.
+1. The WAL grows forever. Every update to the same key adds another entry, leading to a lot of redundant data.
+2. An in-memory hashmap gives us O(1) lookups but cannot scale beyond RAM.
+3. Replaying the entire WAL during application startup becomes painfully slow.
 
-In Part 2, we will introduce LSM trees which solves all of the above problems.
+In Part 2, we will introduce LSM trees, which solve these problems by adding sorted in-memory structures and searchable disk files.
