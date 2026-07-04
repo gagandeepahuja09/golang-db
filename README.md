@@ -102,5 +102,3 @@ INSERT INTO users VALUES (25, user1, 1)
 The project is also documented as a learning series focused on intuition, not just implementation steps:
 
 - [Part 1: WAL](docs/blog/part1.md)
-- [Part 2: Memtable and SSTable](docs/blog/part2.md)
-- [Part 3: Compaction Notes](docs/blog/part3.md)

@@ -97,7 +97,7 @@ So the rule is: **write to disk first, then update memory.**
 
 ## Problem: How Should We Write to Disk?
 
-There is a golden rule for database performance 
+There is a golden rule for database performance:
 > Sequential writes are significantly faster than random writes.
 
 Let's go over what sequential and random writes actually are and why that is the case.
@@ -106,11 +106,7 @@ Let's go over what sequential and random writes actually are and why that is the
 
 On the other hand, **random write** means that the data is written in a scattered way across non-contiguous locations. 
 
-In case of random writes, the disk head has to jump around which makes it much slower than sequential writes where the disk head doesn't have to jump around and progressively moves through contiguous locations.
-
-That disk-head explanation is easiest to visualize for HDDs. SSDs do not have moving heads, but sequential writes are still useful because they are friendlier to batching, filesystems, and storage-device internals.
-
-Let's take an example to understand this in greater detail.
+For HDDs, random writes are slow because the disk head has to physically jump around. SSDs do not have a moving head, but the file-write pattern still matters.
 
 Consider two updates to the same key:
 ```text
@@ -118,9 +114,15 @@ PUT user_1 Alice
 PUT user_1 Bob
 ```
 
-We could try to find and overwrite the first entry. But that is a random write, we have to seek to the location of `user_1`, figure out if the new value fits in the same space, and handle the case where it doesn't.
+Suppose the file already contains:
 
-Instead, we can just append both entries and consider the latest value for the key as the source of truth:
+```text
+[user_1 = Alice]
+```
+
+Now we want to update `user_1` to `Bob`. If we overwrite the old value in place, we first have to find the old bytes, check whether the new value fits in the same space, and handle the case where it does not.
+
+A simpler approach is to never rewrite old bytes. Just append the new value to the end of the file and treat the latest value as the source of truth:
 ```text
 [user_1 = Alice]
 [user_1 = Bob]
