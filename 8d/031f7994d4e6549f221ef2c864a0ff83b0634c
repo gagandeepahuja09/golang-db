@@ -1,0 +1,36 @@
+docs/blog/part2.md
+  s_db6f27d5c5c062::t_323f6ca13ac25f 42-44,46,48,53-58,60-62,66-71,75-87,89
+  s_db6f27d5c5c062::t_661b97f684365c 91
+  s_db6f27d5c5c062::t_a271c66929b6bf 1,3-5,7,11-14,45,88,107,261,266,337,576,580
+  s_db6f27d5c5c062::t_3c8792744b7294 25,401
+  s_db6f27d5c5c062::t_ebcf5c4c71ab37 495,499-500,504,506,508,510,553,557
+  s_db6f27d5c5c062::t_f0ae8fee8b870b 74
+  s_db6f27d5c5c062::t_54c7b2153888e4 555,559-561,563-564,566,568,570-572
+  s_db6f27d5c5c062::t_7cf2cf40ca52d8 18,259,265,276,278
+  s_db6f27d5c5c062::t_ba05340a6aa0e1 8-9
+  s_db6f27d5c5c062::t_332692531b3da7 72
+  s_db6f27d5c5c062::t_fc149b21c80f6e 90
+  s_db6f27d5c5c062::t_c8ce901638a3ad 279-280
+  s_db6f27d5c5c062::t_b80b41f3869e72 493-494
+  s_db6f27d5c5c062::t_1a0336d166cf1a 496-497
+  s_db6f27d5c5c062::t_764cfc2d194e05 554
+  s_db6f27d5c5c062::t_f9f56c4bd948ae 556
+  s_db6f27d5c5c062::t_b5f84c7f52c607 558
+  s_db6f27d5c5c062::t_a85a2233d8ac87 502
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8d031f7994d4e6549f221ef2c864a0ff83b0634c",
+  "prompts": {},
+  "sessions": {
+    "s_db6f27d5c5c062": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2cb4-2c44-7c22-8b14-20876c112083",
+        "model": "gpt-5.5"
+      },
+      "human_author": "gagandeepahuja09 <gagandeepahuja09@gmail.com>"
+    }
+  }
+}
